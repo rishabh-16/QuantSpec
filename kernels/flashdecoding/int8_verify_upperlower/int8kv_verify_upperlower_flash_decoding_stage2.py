@@ -18,7 +18,7 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage2(
     cur_qseq: tl.constexpr,
     BLOCK_SEQ: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
-    MAX_LEN: tl.constexpr,
+    MAX_LEN,
     HAVE_FULL: tl.constexpr
 ):
     cur_batch = tl.program_id(0)
@@ -26,7 +26,8 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage2(
 
     offs_d = tl.arange(0, BLOCK_DMODEL)
 
-    block_n_size = tl.cdiv(MAX_LEN, BLOCK_SEQ) + 1
+    MAX_LEN_INT = tl.load(MAX_LEN)
+    block_n_size = tl.cdiv(MAX_LEN_INT, BLOCK_SEQ) + 1
 
     sum_exp = 0.0
     max_logic = -float("inf")
@@ -67,7 +68,7 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage2(
 
 # TODO: this function can be improved
 @torch.no_grad()
-def int8kv_verify_upperlower_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mid_out, full_logexpsum, cache_len, block_seq):
+def int8kv_verify_upperlower_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mid_out, full_logexpsum, qcache_len, block_seq):
     Lk = mid_out.shape[-1]
     assert Lk in {16, 32, 64, 128, 256, 512}
     batch, head_num = mid_out.shape[0], mid_out.shape[1]
@@ -88,7 +89,7 @@ def int8kv_verify_upperlower_flash_decode_stage2(mid_out, mid_out_logexpsum, O, 
                 cur_qseq=q_idx,
                 BLOCK_SEQ=block_seq,
                 BLOCK_DMODEL=Lk,
-                MAX_LEN=cache_len,
+                MAX_LEN=qcache_len,
                 HAVE_FULL=True,
                 num_warps=4,
                 num_stages=2,
@@ -105,7 +106,7 @@ def int8kv_verify_upperlower_flash_decode_stage2(mid_out, mid_out_logexpsum, O, 
                 cur_qseq=q_idx,
                 BLOCK_SEQ=block_seq,
                 BLOCK_DMODEL=Lk,
-                MAX_LEN=cache_len,
+                MAX_LEN=qcache_len,
                 HAVE_FULL=False,
                 num_warps=4,
                 num_stages=2,

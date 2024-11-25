@@ -66,7 +66,7 @@ def _fwd_kernel_int4kv_int8pack_flash_decode_stage2(
 
 
 @torch.no_grad()
-def int4kv_int8pack_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mid_out, full_logexpsum, cache_len, block_seq):
+def int4kv_int8pack_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mid_out, full_logexpsum, qcache_len, block_seq):
     Lk = mid_out.shape[-1]
     assert Lk in {16, 32, 64, 128, 256, 512}
     batch, head_num = mid_out.shape[0], mid_out.shape[1]
@@ -83,7 +83,7 @@ def int4kv_int8pack_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mid_
             full_logexpsum.stride(0), full_logexpsum.stride(1), full_logexpsum.stride(2),
             BLOCK_SEQ=block_seq,
             BLOCK_DMODEL=Lk,
-            MAX_LEN=cache_len,
+            MAX_LEN=qcache_len,
             HAVE_FULL=True,
             num_warps=4,
             num_stages=2,
@@ -99,7 +99,7 @@ def int4kv_int8pack_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mid_
             mid_out_logexpsum.stride(0), mid_out_logexpsum.stride(1), mid_out_logexpsum.stride(2), # None, None, None, None
             BLOCK_SEQ=block_seq,
             BLOCK_DMODEL=Lk,
-            MAX_LEN=cache_len,
+            MAX_LEN=qcache_len,
             HAVE_FULL=False,
             num_warps=4,
             num_stages=2,

@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 
 def token_decode_attention_flash_decoding(
-    q, cache_k, cache_v, out=None, alloc_tensor_func=torch.zeros, cache_len=0
+    q, cache_k, cache_v, out=None, alloc_tensor_func=torch.zeros, qcache_len=0
 ):
     """
     q : torch.Tensor
@@ -32,10 +32,10 @@ def token_decode_attention_flash_decoding(
     o_tensor = alloc_tensor_func(tuple(q.shape), dtype=q.dtype, device=q.device) if out is None else out
 
     mid_o = alloc_tensor_func(
-        [batch_size, q_head_num, cache_len // BLOCK_SEQ + 1, head_dim], dtype=torch.float32, device=q.device
+        [batch_size, q_head_num, qcache_len // BLOCK_SEQ + 1, head_dim], dtype=torch.float32, device=q.device
     )
     mid_o_logexpsum = alloc_tensor_func(
-        [batch_size, q_head_num, cache_len // BLOCK_SEQ + 1], dtype=torch.float32, device=q.device
+        [batch_size, q_head_num, qcache_len // BLOCK_SEQ + 1], dtype=torch.float32, device=q.device
     )
 
     flash_decode_stage1(
@@ -44,8 +44,8 @@ def token_decode_attention_flash_decoding(
         cache_v,
         mid_o,
         mid_o_logexpsum,
-        cache_len,
+        qcache_len,
         BLOCK_SEQ,
     )
-    flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), cache_len, BLOCK_SEQ)
+    flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), qcache_len, BLOCK_SEQ)
     return o_tensor

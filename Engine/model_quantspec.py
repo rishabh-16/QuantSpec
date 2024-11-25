@@ -8,8 +8,10 @@ from torch.nn import functional as F
 import torch.distributed as dist
 import math 
 from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
-from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
+# from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
 from QuantSpec_magidec.kernels.flashdecoding.int8_upperlower.int8kv_upperlower_flash_decoding import token_decode_attention_int8kv_upperlower_flash_decoding
+
+from QuantSpec_magidec.kernels.flashdecoding.int8_failed_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
 
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
@@ -71,9 +73,10 @@ transformer_configs = {
 }
 
 class KVCache(nn.Module):
-    def __init__(self, max_batch_size, max_seq_length,n_heads, head_dim, dtype=torch.bfloat16, **cache_kwargs):
+    def __init__(self, max_batch_size, max_seq_length, n_heads, head_dim, dtype=torch.bfloat16, **cache_kwargs):
         super().__init__()
         qtype = torch.int8
+        self.max_seq_length = max_seq_length
         self.residual_len = cache_kwargs.get("residual_len", 256)
         self.group_size = cache_kwargs.get("group_size", 128)
         self.k_bits = cache_kwargs.get("k_bits", 4)
@@ -347,7 +350,9 @@ class Attention(nn.Module):
             out=None,
             alloc_tensor_func=torch.zeros,
             precision=8,
-            cache_len=qcache_seqlens[0],
+            max_seq_length=self.kv_cache.max_seq_length,
+            max_residual_len=2 * self.kv_cache.residual_len + 1,
+            qcache_len=qcache_seqlens[0],
             residual_len=cache_seqlens[0] - qcache_seqlens[0],
         )
 
@@ -422,8 +427,10 @@ class Attention(nn.Module):
             full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
             out=None,
             alloc_tensor_func=torch.zeros,
-            precision=8,
-            cache_len=qcache_seqlens[0],
+            precision=4,
+            max_seq_length=self.kv_cache.max_seq_length,
+            max_residual_len=2 * self.kv_cache.residual_len + 1,
+            qcache_len=qcache_seqlens[0],
             residual_len=cache_seqlens[0] - qcache_seqlens[0],
         )
         

@@ -78,7 +78,7 @@ def _fwd_kernel_flash_decode_stage1(
     tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum, max_logic + tl.log(sum_exp))
 
 @torch.no_grad()
-def flash_decode_stage1(q, k, v, mid_out, mid_out_logsumexp, cache_len, block_seq):
+def flash_decode_stage1(q, k, v, mid_out, mid_out_logsumexp, qcache_len, block_seq):
     """
     q : torch.Tensor
         The query tensor of shape (batch_size, num_heads, head_dim). It represents 
@@ -111,7 +111,7 @@ def flash_decode_stage1(q, k, v, mid_out, mid_out_logsumexp, cache_len, block_se
     assert Lk in {16, 32, 64, 128, 256, 512}
     sm_scale = 1.0 / (Lk ** 0.5)
     batch, head_num = q.shape[0], q.shape[1]
-    grid = (batch, head_num, triton.cdiv(cache_len, BLOCK_SEQ))
+    grid = (batch, head_num, triton.cdiv(qcache_len, BLOCK_SEQ))
     gqa_group_size = q.shape[1] // k.shape[1]
 
     # import IPython

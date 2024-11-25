@@ -11,7 +11,7 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
     cache_quant_k_upper, cache_quant_k_lower, cache_scale_k, cache_min_k, \
     cache_quant_v_upper, cache_quant_v_lower, cache_scale_v, cache_min_v, \
     kbit, vbit, group_size, full_k=None, full_v=None, out=None, alloc_tensor_func=torch.zeros, precision=8,
-    cache_len=0, residual_len=0
+    max_seq_length=0, max_residual_len=0, qcache_len=0, residual_len=0
 ):
     """
     q : torch.Tensor
@@ -54,6 +54,8 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         How many quantized elements will be packed together into a int32 element.
     """
     # If quantization group size is 32 and batch size = 1, This should be set to 256
+    assert precision == 4, f"Precision should be 4, not {precision}"
+    
     BLOCK_SEQ = 128
     assert kbit == vbit, "We only support kbit == vbit in [2, 4]"
     batch_size = q.shape[0]
@@ -66,10 +68,10 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
     o_tensor = alloc_tensor_func(q.shape, dtype=q.dtype, device=q.device) if out is None else out
 
     mid_o = alloc_tensor_func(
-        [batch_size, q_head_num, cache_len // BLOCK_SEQ + 1, head_dim], dtype=torch.float32, device=q.device
+        [batch_size, q_head_num, max_seq_length // BLOCK_SEQ + 1, head_dim], dtype=torch.float32, device=q.device
     )
     mid_o_logexpsum = alloc_tensor_func(
-        [batch_size, q_head_num, cache_len // BLOCK_SEQ + 1], dtype=torch.float32, device=q.device
+        [batch_size, q_head_num, max_seq_length // BLOCK_SEQ + 1], dtype=torch.float32, device=q.device
     )
 
     q_kernel = q.view(calcu_shape1)
@@ -85,7 +87,7 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         cache_min_v,
         mid_o,
         mid_o_logexpsum,
-        cache_len,
+        qcache_len,
         BLOCK_SEQ,
         kbit, 
         vbit, 
@@ -95,8 +97,10 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
     )
 
     if full_k is not None and full_v is not None:
-        full_k = full_k[:, :, :residual_len, :]
-        full_v = full_v[:, :, :residual_len, :]
+        mask = torch.arange(max_residual_len, device=full_k.device).unsqueeze(0).unsqueeze(0).unsqueeze(3) < residual_len
+        full_k.mul_(mask)
+        full_v.mul_(mask)
+        
         full_attn_weights = torch.matmul(q, full_k.transpose(2, 3)) / math.sqrt(q.shape[-1])
         full_attn_weights = full_attn_weights.to(torch.float32)
         max_logic = torch.max(full_attn_weights, dim=-1)[0]
@@ -108,7 +112,7 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
     else:
         full_attn_weights, logExpSum = None, None
 
-    int8kv_upperlower_flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), full_attn_weights, logExpSum, cache_len, BLOCK_SEQ)
+    int8kv_upperlower_flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), full_attn_weights, logExpSum, qcache_len, BLOCK_SEQ)
 
     # import IPython
     # IPython.embed()
