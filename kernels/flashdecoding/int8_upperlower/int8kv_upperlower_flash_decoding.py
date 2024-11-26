@@ -54,7 +54,7 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         How many quantized elements will be packed together into a int32 element.
     """
     # If quantization group size is 32 and batch size = 1, This should be set to 256
-    assert precision == 4, f"Precision should be 4, not {precision}"
+    # assert precision == 4, f"Precision should be 4, not {precision}"
     
     BLOCK_SEQ = 128
     assert kbit == vbit, "We only support kbit == vbit in [2, 4]"
@@ -103,6 +103,9 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         
         full_attn_weights = torch.matmul(q, full_k.transpose(2, 3)) / math.sqrt(q.shape[-1])
         full_attn_weights = full_attn_weights.to(torch.float32)
+        
+        full_attn_weights[full_attn_weights == 0] = float('-inf')
+        
         max_logic = torch.max(full_attn_weights, dim=-1)[0]
         exp_logic = torch.exp(full_attn_weights - max_logic.unsqueeze(3))
         full_attn_weights = torch.matmul(exp_logic, full_v.to(torch.float32))
@@ -114,6 +117,4 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
 
     int8kv_upperlower_flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), full_attn_weights, logExpSum, qcache_len, BLOCK_SEQ)
 
-    # import IPython
-    # IPython.embed()
     return o_tensor

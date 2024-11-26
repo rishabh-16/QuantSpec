@@ -94,10 +94,6 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
     )
 
     if full_k is not None and full_v is not None:
-        mask = torch.arange(max_residual_len, device=full_k.device).unsqueeze(0).unsqueeze(0).unsqueeze(3) < residual_len
-        full_k.mul_(mask)
-        full_v.mul_(mask)
-        
         full_attn_weights = torch.matmul(q, full_k.transpose(2, 3)) / math.sqrt(q.shape[-1])
         full_attn_weights = full_attn_weights.to(torch.float32)
         attn_mask = torch.tril(torch.ones((verify_len, max_residual_len), device=q.device), diagonal=residual_len-verify_len)

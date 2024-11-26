@@ -77,7 +77,7 @@ class KVCache(nn.Module):
         super().__init__()
         qtype = torch.int8
         self.max_seq_length = max_seq_length
-        self.residual_len = cache_kwargs.get("residual_len", 256)
+        self.residual_len = cache_kwargs.get("residual_len", 128)
         self.group_size = cache_kwargs.get("group_size", 128)
         self.k_bits = cache_kwargs.get("k_bits", 4)
         self.v_bits = cache_kwargs.get("v_bits", 4)
@@ -356,11 +356,13 @@ class Attention(nn.Module):
             residual_len=cache_seqlens[0] - qcache_seqlens[0],
         )
 
-        y = y.contiguous().view(bsz, seqlen, self.dim)
+        y = y.transpose(1, 2).reshape(bsz, seqlen, self.dim).contiguous()
 
+        
         y = self.wo(y)
         if self.process_group != None:
             dist.all_reduce(y)
+
         return y
 
     def prefill(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
@@ -427,7 +429,7 @@ class Attention(nn.Module):
             full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
             out=None,
             alloc_tensor_func=torch.zeros,
-            precision=4,
+            precision=8,
             max_seq_length=self.kv_cache.max_seq_length,
             max_residual_len=2 * self.kv_cache.residual_len + 1,
             qcache_len=qcache_seqlens[0],
@@ -454,11 +456,12 @@ class Attention(nn.Module):
         #     precision=8,
         # )
 
-        y = y.contiguous().view(bsz, seqlen, self.dim)
+        y = y.transpose(1, 2).reshape(bsz, seqlen, self.dim).contiguous()
 
         y = self.wo(y)
         if self.process_group != None:
             dist.all_reduce(y)
+
         return y
 
 class FeedForward(nn.Module):

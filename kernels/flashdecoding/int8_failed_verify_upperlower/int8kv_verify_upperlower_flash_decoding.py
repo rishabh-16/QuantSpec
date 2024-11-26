@@ -117,6 +117,4 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
 
     int8kv_verify_upperlower_flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), full_attn_weights, logExpSum, qcache_len, BLOCK_SEQ)
 
-    # import IPython
-    # IPython.embed()
     return o_tensor
