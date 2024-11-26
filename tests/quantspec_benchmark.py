@@ -143,18 +143,26 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
             t2 = time.time()
             draft_time+=t2-t1
 
-        # import IPython
-        # IPython.embed()
-
         engine.cachelens = engine.cachelens - args.gamma
 
-        # Target Verification
-        target_logits = engine.inference(tokens_buffer)
+        # Target Verification    
+        target_logits = engine.inference(tokens_buffer)    
+        # import os
+        
+        # Only for debug proposes
+        # if os.environ.get('LONG1') == "1":
+        #     os.environ['IPY'] = '1'
 
+        # target_logits = engine.inference(tokens_buffer[:, :1])
+        # engine.cachelens -= 1
+
+        # if os.environ.get('LONG2') == "1":
+        #     os.environ['IPY'] = '1'
+
+        # debug_logits = engine.inference(tokens_buffer[:, :4])
+        
         # import IPython
         # IPython.embed()
-
-        
 
         if benchmark:
             torch.cuda.synchronize()

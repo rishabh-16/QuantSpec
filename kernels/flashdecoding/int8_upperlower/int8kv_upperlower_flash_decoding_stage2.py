@@ -17,7 +17,7 @@ def _fwd_kernel_int8kv_upperlower_flash_decode_stage2(
     stride_full_o_eb, stride_full_o_eh, 
     BLOCK_SEQ: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
-    MAX_LEN: tl.constexpr,
+    MAX_LEN,
     HAVE_FULL: tl.constexpr
 ):
     cur_batch = tl.program_id(0)
@@ -25,7 +25,8 @@ def _fwd_kernel_int8kv_upperlower_flash_decode_stage2(
 
     offs_d = tl.arange(0, BLOCK_DMODEL)
 
-    block_n_size = tl.cdiv(MAX_LEN, BLOCK_SEQ) + 1
+    MAX_LEN_INT = tl.load(MAX_LEN)
+    block_n_size = tl.cdiv(MAX_LEN_INT, BLOCK_SEQ) + 1
     # block_n_size = (tl.constexpr(MAX_LEN) + BLOCK_SEQ - 1) // BLOCK_SEQ + 1
 
     sum_exp = 0.0
@@ -67,12 +68,11 @@ def _fwd_kernel_int8kv_upperlower_flash_decode_stage2(
 
 
 @torch.no_grad()
-def int8kv_upperlower_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mid_out, full_logexpsum, cache_len, block_seq):
+def int8kv_upperlower_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mid_out, full_logexpsum, qcache_len, block_seq):
     Lk = mid_out.shape[-1]
     assert Lk in {16, 32, 64, 128, 256, 512}
     batch, head_num = mid_out.shape[0], mid_out.shape[1]
     grid = (batch, head_num)
-    # cache_len_int = cache_len.item() if torch.is_tensor(cache_len) else cache_len
 
     if full_mid_out is not None and full_logexpsum is not None:
         _fwd_kernel_int8kv_upperlower_flash_decode_stage2[grid](
@@ -85,7 +85,7 @@ def int8kv_upperlower_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mi
             full_logexpsum.stride(0), full_logexpsum.stride(1),
             BLOCK_SEQ=block_seq,
             BLOCK_DMODEL=Lk,
-            MAX_LEN=cache_len,
+            MAX_LEN=qcache_len,
             HAVE_FULL=True,
             num_warps=4,
             num_stages=2,
@@ -101,7 +101,7 @@ def int8kv_upperlower_flash_decode_stage2(mid_out, mid_out_logexpsum, O, full_mi
             mid_out_logexpsum.stride(0), mid_out_logexpsum.stride(1), # None, None
             BLOCK_SEQ=block_seq,
             BLOCK_DMODEL=Lk,
-            MAX_LEN=cache_len,
+            MAX_LEN=qcache_len,
             HAVE_FULL=False,
             num_warps=4,
             num_stages=2,

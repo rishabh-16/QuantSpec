@@ -142,7 +142,7 @@ def int8kv_int8pack_flash_decode_stage1(
     cache_min_v,
     mid_out, 
     mid_out_logsumexp, 
-    cache_len, 
+    qcache_len, 
     block_seq,
     kbit, 
     vbit, 
@@ -198,7 +198,7 @@ def int8kv_int8pack_flash_decode_stage1(
 
     sm_scale = 1.0 / (Lk ** 0.5)
     batch, head_num = q.shape[0], q.shape[1]
-    grid = (batch, head_num, triton.cdiv(cache_len, BLOCK_SEQ))
+    grid = (batch, head_num, triton.cdiv(qcache_len, BLOCK_SEQ))
     gqa_group_size = q.shape[1] // cache_quant_k.shape[1]
 
     # import IPython

@@ -47,7 +47,7 @@ def _fwd_kernel_flash_decode_stage2(
 
 
 @torch.no_grad()
-def flash_decode_stage2(mid_out, mid_out_logexpsum, O, cache_len, block_seq):
+def flash_decode_stage2(mid_out, mid_out_logexpsum, O, qcache_len, block_seq):
     Lk = mid_out.shape[-1]
     assert Lk in {16, 32, 64, 128, 256, 512}
     batch, head_num = mid_out.shape[0], mid_out.shape[1]
@@ -60,7 +60,7 @@ def flash_decode_stage2(mid_out, mid_out_logexpsum, O, cache_len, block_seq):
         O.stride(0), O.stride(1), O.stride(2),
         BLOCK_SEQ=block_seq,
         BLOCK_DMODEL=Lk,
-        MAX_LEN=cache_len,
+        MAX_LEN=qcache_len,
         num_warps=4,
         num_stages=4,
     )

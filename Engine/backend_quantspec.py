@@ -28,7 +28,7 @@ class LMBackend:
         self.batch_size = max_batch_size
         self.cachelens = torch.zeros(max_batch_size, dtype=torch.int32, device=self.device)
         self.q_cachelens = torch.zeros(max_batch_size, dtype=torch.int32, device=self.device)
-        self.residual_len = cache_kwargs.get("residual_len", 256)
+        self.residual_len = cache_kwargs.get("residual_len", 128)
         self.group_size = cache_kwargs.get("group_size", 128)
         with torch.device(self.device):
             self.model.setup_caches(max_batch_size=max_batch_size, max_seq_length=max_seq_length, **cache_kwargs)

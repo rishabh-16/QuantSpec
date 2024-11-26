@@ -8,13 +8,14 @@ TORCH_LOGS=+dynamo TORCHDYNAMO_VERBOSE=1 PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVI
     --standalone \
     --nproc_per_node=$(echo $1 | tr ',' ' ' | wc -w) \
     tests/quantspec_benchmark.py \
-    --model /home/rishabhtiwari/cache/checkpoints/meta-llama/Meta-Llama-3.1-8B/model.pth \
+    --model /rscratch/xihc/MagicDec/checkpoints/meta-llama/Meta-Llama-3.1-8B/model.pth \
     --model_name meta-llama/Meta-Llama-3.1-8B \
     --rank_group $(seq -s ' ' 0 $(($(echo $1 | tr ',' ' ' | wc -w) - 1))) \
-    --gamma 3 \
+    --gamma 6 \
     --B 1 \
     --prefix_len 16000 \
     --gen_len 64 \
     --printout \
-    --compile \
     --benchmark
+
+#    --compile \

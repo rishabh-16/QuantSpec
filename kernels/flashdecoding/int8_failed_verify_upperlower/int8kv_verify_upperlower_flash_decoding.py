@@ -11,10 +11,11 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
     cache_quant_k_upper, cache_quant_k_lower, cache_scale_k, cache_min_k, \
     cache_quant_v_upper, cache_quant_v_lower, cache_scale_v, cache_min_v, \
     kbit, vbit, group_size, full_k=None, full_v=None, out=None, alloc_tensor_func=torch.zeros, precision=8,
+    max_seq_length=0, max_residual_len=0, qcache_len=0, residual_len=0
 ):
     """
     q : torch.Tensor
-        The query tensor of shape (batch_size, num_heads, verify_length, head_dim). It represents 
+        The query tensor of shape (batch_size, num_heads, 1, head_dim). It represents 
         the query for the current token at the specific decoding step.
     
     cache_quant_k : torch.Tensor
@@ -56,23 +57,21 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
     BLOCK_SEQ = 128
     assert kbit == vbit, "We only support kbit == vbit in [2, 4]"
     batch_size = q.shape[0]
-    q_head_num, head_dim, verify_len = q.shape[1], q.shape[-1], q.shape[2]
-    cache_len = cache_scale_v.shape[-1]
+    q_head_num, head_dim = q.shape[1], q.shape[-1]
+    query_sequence_length = q.shape[2] # For Speculative Verification
 
     elem_per_int = 8 // kbit # 8 since we use int8 to pack the quantized elements
-    calcu_shape1 = (batch_size, q_head_num, verify_len, head_dim)
+    calcu_shape1 = (batch_size, q_head_num, query_sequence_length, head_dim)
 
     o_tensor = alloc_tensor_func(q.shape, dtype=q.dtype, device=q.device) if out is None else out
 
     mid_o = alloc_tensor_func(
-        [batch_size, q_head_num, cache_len // BLOCK_SEQ + 1, verify_len, head_dim], dtype=torch.float32, device=q.device
+        [batch_size, q_head_num, query_sequence_length, max_seq_length // BLOCK_SEQ + 1, head_dim], dtype=torch.float32, device=q.device
     )
     mid_o_logexpsum = alloc_tensor_func(
-        [batch_size, q_head_num, cache_len // BLOCK_SEQ + 1, verify_len], dtype=torch.float32, device=q.device
+        [batch_size, q_head_num, query_sequence_length, max_seq_length // BLOCK_SEQ + 1], dtype=torch.float32, device=q.device
     )
 
-    # start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
-    # start.record()
     q_kernel = q.view(calcu_shape1)
     int8kv_verify_upperlower_flash_decode_stage1(
         q_kernel,
@@ -86,7 +85,7 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
         cache_min_v,
         mid_o,
         mid_o_logexpsum,
-        cache_len,
+        qcache_len,
         BLOCK_SEQ,
         kbit, 
         vbit, 
@@ -94,13 +93,19 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
         elem_per_int,
         precision
     )
-    # end.record()
-    # torch.cuda.synchronize()
-    # print(f"{start.elapsed_time(end)}ms")
 
     if full_k is not None and full_v is not None:
+        mask = torch.arange(max_residual_len, device=full_k.device).unsqueeze(0).unsqueeze(0).unsqueeze(3) < residual_len
+        full_k.mul_(mask)
+        full_v.mul_(mask)
+        
         full_attn_weights = torch.matmul(q, full_k.transpose(2, 3)) / math.sqrt(q.shape[-1])
         full_attn_weights = full_attn_weights.to(torch.float32)
+        attn_mask = torch.tril(torch.ones((query_sequence_length, max_residual_len), device=q.device), diagonal=residual_len-query_sequence_length)
+        attn_mask = attn_mask.unsqueeze(0).unsqueeze(1).repeat(batch_size, q_head_num, 1, 1)
+        
+        full_attn_weights[attn_mask == 0] = float('-inf')
+
         max_logic = torch.max(full_attn_weights, dim=-1)[0]
         exp_logic = torch.exp(full_attn_weights - max_logic.unsqueeze(3))
         full_attn_weights = torch.matmul(exp_logic, full_v.to(torch.float32))
@@ -110,8 +115,6 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
     else:
         full_attn_weights, logExpSum = None, None
 
-    int8kv_verify_upperlower_flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), full_attn_weights, logExpSum, cache_len, BLOCK_SEQ)
+    int8kv_verify_upperlower_flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), full_attn_weights, logExpSum, qcache_len, BLOCK_SEQ)
 
-    # import IPython
-    # IPython.embed()
     return o_tensor
