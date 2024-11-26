@@ -55,17 +55,17 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1(
     if VERIFY_LEN > 1:
         off_q_token1 = cur_batch * stride_qbs + cur_head * stride_qh + 1 * stride_qtoken + offs_q_d
     if VERIFY_LEN > 2:
-        off_q_token2 = cur_batch * stride_qbs + cur_head * stride_qh + 1 * stride_qtoken + offs_q_d
+        off_q_token2 = cur_batch * stride_qbs + cur_head * stride_qh + 2 * stride_qtoken + offs_q_d
     if VERIFY_LEN > 3:
-        off_q_token3 = cur_batch * stride_qbs + cur_head * stride_qh + 1 * stride_qtoken + offs_q_d
+        off_q_token3 = cur_batch * stride_qbs + cur_head * stride_qh + 3 * stride_qtoken + offs_q_d
     if VERIFY_LEN > 4:
-        off_q_token4 = cur_batch * stride_qbs + cur_head * stride_qh + 1 * stride_qtoken + offs_q_d
+        off_q_token4 = cur_batch * stride_qbs + cur_head * stride_qh + 4 * stride_qtoken + offs_q_d
     if VERIFY_LEN > 5:
-        off_q_token5 = cur_batch * stride_qbs + cur_head * stride_qh + 1 * stride_qtoken + offs_q_d
+        off_q_token5 = cur_batch * stride_qbs + cur_head * stride_qh + 5 * stride_qtoken + offs_q_d
     if VERIFY_LEN > 6:
-        off_q_token6 = cur_batch * stride_qbs + cur_head * stride_qh + 1 * stride_qtoken + offs_q_d
+        off_q_token6 = cur_batch * stride_qbs + cur_head * stride_qh + 6 * stride_qtoken + offs_q_d
     if VERIFY_LEN > 7:
-        off_q_token7 = cur_batch * stride_qbs + cur_head * stride_qh + 1 * stride_qtoken + offs_q_d
+        off_q_token7 = cur_batch * stride_qbs + cur_head * stride_qh + 7 * stride_qtoken + offs_q_d
         
     # Key and Value offset
     off_quant_kbh = cur_batch * stride_quant_kbs + cur_head * stride_quant_kh # Index of current Batch and Head
@@ -190,7 +190,7 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1(
         if VERIFY_LEN > 6:
             att_value_token6 = tl.sum(q_token6[None, :] * k, 1)
             att_value_token6 *= sm_scale
-        if VERIFY_LEN > 6:
+        if VERIFY_LEN > 7:
             att_value_token7 = tl.sum(q_token7[None, :] * k, 1)
             att_value_token7 *= sm_scale
 
