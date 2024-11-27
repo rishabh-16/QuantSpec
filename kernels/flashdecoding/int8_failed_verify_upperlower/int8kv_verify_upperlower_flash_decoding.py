@@ -105,7 +105,7 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
 
         attn_mask = torch.arange(max_residual_len, device=q.device).unsqueeze(0).repeat(query_sequence_length, 1)
         attn_mask -= torch.arange(query_sequence_length, device=q.device).unsqueeze(1).repeat(1, max_residual_len)
-        attn_mask = (attn_mask < residual_len-query_sequence_length) * 1.
+        attn_mask = (attn_mask <= residual_len-query_sequence_length) * 1.
 
         # attn_mask = torch.tril(torch.ones((query_sequence_length, max_residual_len), device=q.device), diagonal=residual_len-query_sequence_length)
         attn_mask = attn_mask.unsqueeze(0).unsqueeze(1).repeat(batch_size, q_head_num, 1, 1)

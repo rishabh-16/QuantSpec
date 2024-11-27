@@ -421,7 +421,7 @@ class Attention(nn.Module):
             group_size=self.kv_cache.group_size,
             full_k=self.repeat_kv(self.kv_cache.k_cache, repeat_factor),
             full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
-            precision=8,
+            precision=4,
             max_seq_length=self.kv_cache.max_seq_length,
             max_residual_len=2 * self.kv_cache.residual_len + 1,
             qcache_len=qcache_seqlens[0],
