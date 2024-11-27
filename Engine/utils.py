@@ -3,6 +3,196 @@ import numpy as np
 import random
 from torch.nn.functional import softmax
 from flash_attn import flash_attn_with_kvcache
+from QuantSpec_magidec.kernels.flashdecoding.int8_failed_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
+
+from QuantSpec_magidec.kernels.flashdecoding.int8_upperlower.int8kv_upperlower_flash_decoding import token_decode_attention_int8kv_upperlower_flash_decoding
+
+
+
+torch.library.define(
+    "mylib::flash_verification",
+    "(Tensor q, \
+    Tensor(a!) cache_quant_k_upper, \
+    Tensor(b!) cache_quant_k_lower, \
+    Tensor(c!) cache_scale_k, \
+    Tensor(d!) cache_min_k, \
+    Tensor(e!) cache_quant_v_upper, \
+    Tensor(f!) cache_quant_v_lower, \
+    Tensor(g!) cache_scale_v, \
+    Tensor(h!) cache_min_v, \
+    Scalar kbit, \
+    Scalar vbit, \
+    Scalar group_size, \
+    Tensor(i!) full_k, \
+    Tensor(j!) full_v, \
+    Scalar precision, \
+    Scalar max_seq_length, \
+    Scalar max_residual_len, \
+    Tensor qcache_len, \
+    Tensor residual_len) -> Tensor",
+)
+
+@torch.library.impl("mylib::flash_verification", "cuda")
+def flash_verification(
+    q,
+    cache_quant_k_upper,
+    cache_quant_k_lower,
+    cache_scale_k,
+    cache_min_k,
+    cache_quant_v_upper,
+    cache_quant_v_lower,
+    cache_scale_v,
+    cache_min_v,
+    kbit,
+    vbit,
+    group_size,
+    full_k,
+    full_v,
+    precision,
+    max_seq_length,
+    max_residual_len,
+    qcache_len,
+    residual_len
+):
+    return token_decode_attention_int8kv_verify_upperlower_flash_decoding(
+        q=q,
+        cache_quant_k_upper=cache_quant_k_upper,
+        cache_quant_k_lower=cache_quant_k_lower,
+        cache_scale_k=cache_scale_k,
+        cache_min_k=cache_min_k,
+        cache_quant_v_upper=cache_quant_v_upper,
+        cache_quant_v_lower=cache_quant_v_lower,
+        cache_scale_v=cache_scale_v,
+        cache_min_v=cache_min_v,
+        kbit=kbit,
+        vbit=vbit,
+        group_size=group_size,
+        full_k=full_k,
+        full_v=full_v,
+        precision=precision,
+        max_seq_length=max_seq_length,
+        max_residual_len=max_residual_len,
+        qcache_len=qcache_len,
+        residual_len=residual_len
+    )
+
+@torch.library.impl_abstract("mylib::flash_verification")
+def flash_verification_abstract(
+    q,
+    cache_quant_k_upper,
+    cache_quant_k_lower,
+    cache_scale_k,
+    cache_min_k,
+    cache_quant_v_upper,
+    cache_quant_v_lower,
+    cache_scale_v,
+    cache_min_v,
+    kbit,
+    vbit,
+    group_size,
+    full_k,
+    full_v,
+    precision,
+    max_seq_length,
+    max_residual_len,
+    qcache_len,
+    residual_len
+):
+    return torch.empty_like(q)
+
+
+torch.library.define(
+    "mylib::flash_decoding",
+    "(Tensor q, \
+    Tensor(a!) cache_quant_k_upper, \
+    Tensor(b!) cache_quant_k_lower, \
+    Tensor(c!) cache_scale_k, \
+    Tensor(d!) cache_min_k, \
+    Tensor(e!) cache_quant_v_upper, \
+    Tensor(f!) cache_quant_v_lower, \
+    Tensor(g!) cache_scale_v, \
+    Tensor(h!) cache_min_v, \
+    Scalar kbit, \
+    Scalar vbit, \
+    Scalar group_size, \
+    Tensor(i!) full_k, \
+    Tensor(j!) full_v, \
+    Scalar precision, \
+    Scalar max_seq_length, \
+    Scalar max_residual_len, \
+    Tensor qcache_len, \
+    Tensor residual_len) -> Tensor",
+)
+
+@torch.library.impl("mylib::flash_decoding", "cuda")
+def flash_decoding(
+    q,
+    cache_quant_k_upper,
+    cache_quant_k_lower,
+    cache_scale_k,
+    cache_min_k,
+    cache_quant_v_upper,
+    cache_quant_v_lower,
+    cache_scale_v,
+    cache_min_v,
+    kbit,
+    vbit,
+    group_size,
+    full_k,
+    full_v,
+    precision,
+    max_seq_length,
+    max_residual_len,
+    qcache_len,
+    residual_len
+):
+    return token_decode_attention_int8kv_upperlower_flash_decoding(
+        q=q,
+        cache_quant_k_upper=cache_quant_k_upper,
+        cache_quant_k_lower=cache_quant_k_lower,
+        cache_scale_k=cache_scale_k,
+        cache_min_k=cache_min_k,
+        cache_quant_v_upper=cache_quant_v_upper,
+        cache_quant_v_lower=cache_quant_v_lower,
+        cache_scale_v=cache_scale_v,
+        cache_min_v=cache_min_v,
+        kbit=kbit,
+        vbit=vbit,
+        group_size=group_size,
+        full_k=full_k,
+        full_v=full_v,
+        precision=precision,
+        max_seq_length=max_seq_length,
+        max_residual_len=max_residual_len,
+        qcache_len=qcache_len,
+        residual_len=residual_len
+    )
+
+@torch.library.impl_abstract("mylib::flash_decoding")
+def flash_decoding_abstract(
+    q,
+    cache_quant_k_upper,
+    cache_quant_k_lower,
+    cache_scale_k,
+    cache_min_k,
+    cache_quant_v_upper,
+    cache_quant_v_lower,
+    cache_scale_v,
+    cache_min_v,
+    kbit,
+    vbit,
+    group_size,
+    full_k,
+    full_v,
+    precision,
+    max_seq_length,
+    max_residual_len,
+    qcache_len,
+    residual_len
+):
+    return torch.empty_like(q)
+
+
 
 torch.library.define(
     "mylib::custom_func",
