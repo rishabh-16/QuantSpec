@@ -103,11 +103,11 @@ def token_decode_attention_int8kv_verify_upperlower_flash_decoding(
         full_attn_weights = torch.matmul(q, full_k.transpose(2, 3)) / math.sqrt(q.shape[-1])
         full_attn_weights = full_attn_weights.to(torch.float32)
 
-        # attn_mask = torch.arange(max_residual_len, device=q.device).unsqueeze(0).repeat(query_sequence_length, 1)
-        # attn_mask -= torch.arange(query_sequence_length, device=q.device).unsqueeze(1).repeat(1, max_residual_len)
-        # attn_mask = (attn_mask < residual_len) * 1.
+        attn_mask = torch.arange(max_residual_len, device=q.device).unsqueeze(0).repeat(query_sequence_length, 1)
+        attn_mask -= torch.arange(query_sequence_length, device=q.device).unsqueeze(1).repeat(1, max_residual_len)
+        attn_mask = (attn_mask < residual_len-query_sequence_length) * 1.
 
-        attn_mask = torch.tril(torch.ones((query_sequence_length, max_residual_len), device=q.device), diagonal=residual_len-query_sequence_length)
+        # attn_mask = torch.tril(torch.ones((query_sequence_length, max_residual_len), device=q.device), diagonal=residual_len-query_sequence_length)
         attn_mask = attn_mask.unsqueeze(0).unsqueeze(1).repeat(batch_size, q_head_num, 1, 1)
         
         full_attn_weights[attn_mask == 0] = float('-inf')

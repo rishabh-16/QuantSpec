@@ -8,10 +8,6 @@ from torch.nn import functional as F
 import torch.distributed as dist
 import math 
 from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
-from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
-from QuantSpec_magidec.kernels.flashdecoding.int8_upperlower.int8kv_upperlower_flash_decoding import token_decode_attention_int8kv_upperlower_flash_decoding
-
-# from QuantSpec_magidec.kernels.flashdecoding.int8_failed_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
 
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
@@ -332,7 +328,7 @@ class Attention(nn.Module):
         
         repeat_factor = self.n_head // self.n_local_heads
 
-        y = token_decode_attention_int8kv_verify_upperlower_flash_decoding(
+        y = torch.ops.mylib.flash_verification(
             q=q,
             cache_quant_k_upper=self.repeat_kv(self.kv_cache.qk_cache_ubits, repeat_factor),
             cache_quant_k_lower=self.repeat_kv(self.kv_cache.qk_cache_lbits, repeat_factor), 
@@ -347,8 +343,6 @@ class Attention(nn.Module):
             group_size=self.kv_cache.group_size,
             full_k=self.repeat_kv(self.kv_cache.k_cache, repeat_factor),
             full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
-            out=None,
-            alloc_tensor_func=torch.zeros,
             precision=8,
             max_seq_length=self.kv_cache.max_seq_length,
             max_residual_len=2 * self.kv_cache.residual_len + 1,
@@ -412,7 +406,7 @@ class Attention(nn.Module):
 
         # y = torch.ops.mylib.custom_func_2(q, k, v)
 
-        y = token_decode_attention_int8kv_upperlower_flash_decoding(
+        y = torch.ops.mylib.flash_decoding(
             q=q,
             cache_quant_k_upper=self.repeat_kv(self.kv_cache.qk_cache_ubits, repeat_factor),
             cache_quant_k_lower=self.repeat_kv(self.kv_cache.qk_cache_lbits, repeat_factor), 
@@ -427,8 +421,6 @@ class Attention(nn.Module):
             group_size=self.kv_cache.group_size,
             full_k=self.repeat_kv(self.kv_cache.k_cache, repeat_factor),
             full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
-            out=None,
-            alloc_tensor_func=torch.zeros,
             precision=8,
             max_seq_length=self.kv_cache.max_seq_length,
             max_residual_len=2 * self.kv_cache.residual_len + 1,
@@ -436,26 +428,6 @@ class Attention(nn.Module):
             residual_len=cache_seqlens[0] - qcache_seqlens[0],
         )
         
-        # y = token_decode_attention_int8kv_upperlower_flash_decoding(
-        #     q=q,
-        #     cache_quant_k_upper=self.repeat_kv(self.kv_cache.qk_cache_ubits[:, :, :qcache_seqlens], repeat_factor),
-        #     cache_quant_k_lower=self.repeat_kv(self.kv_cache.qk_cache_lbits[:, :, :qcache_seqlens], repeat_factor), 
-        #     cache_scale_k=self.repeat_kv(self.kv_cache.kscale_cache[:, :, :qcache_seqlens//self.kv_cache.group_size], repeat_factor),
-        #     cache_min_k=self.repeat_kv(self.kv_cache.kmin_cache[:, :, :qcache_seqlens//self.kv_cache.group_size], repeat_factor),
-        #     cache_quant_v_upper=self.repeat_kv(self.kv_cache.qval_trans_cache_ubits[:, :, :, :qcache_seqlens//(8//self.kv_cache.v_bits)], repeat_factor),
-        #     cache_quant_v_lower=self.repeat_kv(self.kv_cache.qval_trans_cache_lbits[:, :, :, :qcache_seqlens//(8//self.kv_cache.v_bits)], repeat_factor),
-        #     cache_scale_v=self.repeat_kv(self.kv_cache.valscale_cache[:, :, :, :qcache_seqlens], repeat_factor),
-        #     cache_min_v=self.repeat_kv(self.kv_cache.valmin_cache[:, :, :, :qcache_seqlens], repeat_factor),
-        #     kbit=self.kv_cache.k_bits,
-        #     vbit=self.kv_cache.v_bits,
-        #     group_size=self.kv_cache.group_size,
-        #     full_k=self.repeat_kv(self.kv_cache.k_cache[:, :, :cache_seqlens], repeat_factor),
-        #     full_v=self.repeat_kv(self.kv_cache.v_cache[:, :, :cache_seqlens], repeat_factor),
-        #     out=None,
-        #     alloc_tensor_func=torch.zeros,
-        #     precision=8,
-        # )
-
         y = y.transpose(1, 2).reshape(bsz, seqlen, self.dim).contiguous()
 
         y = self.wo(y)
