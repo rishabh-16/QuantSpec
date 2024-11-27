@@ -16,11 +16,12 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1(
     stride_quant_vbs, stride_quant_vh, stride_quant_vd, # Batch Size, Head, head Dim
     stride_scale_vbs, stride_scale_vh, stride_scale_vd, # Scale and Min should share this stride
     stride_mid_ob, stride_mid_oh, stride_mid_os, stride_mid_otoken, stride_mid_od,
-    stride_mid_o_eb, stride_mid_o_eh, stride_mid_o_etoken, stride_mid_o_es,
+    stride_mid_o_eb, stride_mid_o_eh, stride_mid_o_es, stride_mid_o_etoken,
     kbit: tl.constexpr, vbit: tl.constexpr,
     group_size: tl.constexpr,
     elem_per_int: tl.constexpr,
     gqa_group_size,
+    QCACHE_LEN, # Not tl.constexpt since we need CUDA Graph so we can not use .item()
     VERIFY_LEN: tl.constexpr,
     BLOCK_SEQ: tl.constexpr, 
     BLOCK_SEQ_PER_INT: tl.constexpr,
@@ -34,6 +35,11 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1(
     cur_batch = tl.program_id(0)
     cur_head = tl.program_id(1)
     seq_start_block = tl.program_id(2)
+    
+    QCACHE_LEN_INT = tl.load(QCACHE_LEN)
+    if seq_start_block >= tl.cdiv(QCACHE_LEN_INT, BLOCK_SEQ): # Move this from triton's grid to the kernel to make it compatible with CUDA Graph & torch.compile
+        return
+    
     # cur_kv_head = cur_head // gqa_group_size
 
     offs_q_d = tl.arange(0, BLOCK_DMODEL) # K do not quantize along the head_dim axis
@@ -314,42 +320,42 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1(
             max_logic_token7 = new_max_logic_token7
 
     off_mid_o_token0 = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + seq_start_block * stride_mid_os + 0 * stride_mid_otoken + offs_q_d # offset_d is renamed
-    off_mid_o_logexpsum_token0 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + 0 * stride_mid_o_etoken + seq_start_block
+    off_mid_o_logexpsum_token0 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + seq_start_block * stride_mid_o_es + 0
     tl.store(Mid_O + off_mid_o_token0, acc_token0 / sum_exp_token0)
     tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum_token0, max_logic_token0 + tl.log(sum_exp_token0))
     if VERIFY_LEN > 1:
         off_mid_o_token1 = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + seq_start_block * stride_mid_os + 1 * stride_mid_otoken + offs_q_d # offset_d is renamed
-        off_mid_o_logexpsum_token1 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + 1 * stride_mid_o_etoken + seq_start_block
+        off_mid_o_logexpsum_token1 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + seq_start_block * stride_mid_o_es + 1
         tl.store(Mid_O + off_mid_o_token1, acc_token1 / sum_exp_token1)
         tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum_token1, max_logic_token1 + tl.log(sum_exp_token1))
     if VERIFY_LEN > 2:
         off_mid_o_token2 = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + seq_start_block * stride_mid_os + 2 * stride_mid_otoken + offs_q_d # offset_d is renamed
-        off_mid_o_logexpsum_token2 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + 2 * stride_mid_o_etoken + seq_start_block
+        off_mid_o_logexpsum_token2 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + seq_start_block * stride_mid_o_es + 2
         tl.store(Mid_O + off_mid_o_token2, acc_token2 / sum_exp_token2)
         tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum_token2, max_logic_token2 + tl.log(sum_exp_token2))
     if VERIFY_LEN > 3:
         off_mid_o_token3 = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + seq_start_block * stride_mid_os + 3 * stride_mid_otoken + offs_q_d # offset_d is renamed
-        off_mid_o_logexpsum_token3 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + 3 * stride_mid_o_etoken + seq_start_block
+        off_mid_o_logexpsum_token3 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + seq_start_block * stride_mid_o_es + 3
         tl.store(Mid_O + off_mid_o_token3, acc_token3 / sum_exp_token3)
         tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum_token3, max_logic_token3 + tl.log(sum_exp_token3))
     if VERIFY_LEN > 4:
         off_mid_o_token4 = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + seq_start_block * stride_mid_os + 4 * stride_mid_otoken + offs_q_d # offset_d is renamed
-        off_mid_o_logexpsum_token4 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + 4 * stride_mid_o_etoken + seq_start_block
+        off_mid_o_logexpsum_token4 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + seq_start_block * stride_mid_o_es + 4
         tl.store(Mid_O + off_mid_o_token4, acc_token4 / sum_exp_token4)
         tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum_token4, max_logic_token4 + tl.log(sum_exp_token4))
     if VERIFY_LEN > 5:
         off_mid_o_token5 = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + seq_start_block * stride_mid_os + 5 * stride_mid_otoken + offs_q_d # offset_d is renamed
-        off_mid_o_logexpsum_token5 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + 5 * stride_mid_o_etoken + seq_start_block
+        off_mid_o_logexpsum_token5 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + seq_start_block * stride_mid_o_es + 5
         tl.store(Mid_O + off_mid_o_token5, acc_token5 / sum_exp_token5)
         tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum_token5, max_logic_token5 + tl.log(sum_exp_token5))
     if VERIFY_LEN > 6:
         off_mid_o_token6 = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + seq_start_block * stride_mid_os + 6 * stride_mid_otoken + offs_q_d # offset_d is renamed
-        off_mid_o_logexpsum_token6 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + 6 * stride_mid_o_etoken + seq_start_block
+        off_mid_o_logexpsum_token6 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + seq_start_block * stride_mid_o_es + 6
         tl.store(Mid_O + off_mid_o_token6, acc_token6 / sum_exp_token6)
         tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum_token6, max_logic_token6 + tl.log(sum_exp_token6))
     if VERIFY_LEN > 7:
         off_mid_o_token7 = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + seq_start_block * stride_mid_os + 7 * stride_mid_otoken + offs_q_d # offset_d is renamed
-        off_mid_o_logexpsum_token7 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + 7 * stride_mid_o_etoken + seq_start_block
+        off_mid_o_logexpsum_token7 = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + seq_start_block * stride_mid_o_es + 7
         tl.store(Mid_O + off_mid_o_token7, acc_token7 / sum_exp_token7)
         tl.store(Mid_O_LogExpSum + off_mid_o_logexpsum_token7, max_logic_token7 + tl.log(sum_exp_token7))
 
@@ -366,6 +372,7 @@ def int8kv_verify_upperlower_flash_decode_stage1(
     cache_min_v,
     mid_out, 
     mid_out_logsumexp, 
+    max_seq_length,
     qcache_len, 
     block_seq,
     kbit, 
@@ -424,7 +431,7 @@ def int8kv_verify_upperlower_flash_decode_stage1(
 
     sm_scale = 1.0 / (Lk ** 0.5)
     batch, head_num, verify_len = q.shape[0], q.shape[1], q.shape[2]
-    grid = (batch, head_num, triton.cdiv(qcache_len, BLOCK_SEQ))
+    grid = (batch, head_num, triton.cdiv(max_seq_length, BLOCK_SEQ))
     gqa_group_size = q.shape[1] // cache_quant_k_upper.shape[1]
 
     asm = _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1[grid](
@@ -445,6 +452,7 @@ def int8kv_verify_upperlower_flash_decode_stage1(
         group_size,
         elem_per_int,
         gqa_group_size,
+        QCACHE_LEN=qcache_len,
         VERIFY_LEN=verify_len,
         BLOCK_SEQ=BLOCK_SEQ, # How many int2/int4 elements a block should load
         BLOCK_SEQ_PER_INT=BLOCK_SEQ_PER_INT, # How many int32 elements a block should load
