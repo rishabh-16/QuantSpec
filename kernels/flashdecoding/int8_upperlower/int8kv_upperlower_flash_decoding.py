@@ -87,6 +87,7 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         cache_min_v,
         mid_o,
         mid_o_logexpsum,
+        max_seq_length,
         qcache_len,
         BLOCK_SEQ,
         kbit, 

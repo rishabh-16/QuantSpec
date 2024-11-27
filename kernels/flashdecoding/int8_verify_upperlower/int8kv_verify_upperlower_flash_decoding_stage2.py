@@ -18,7 +18,7 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage2(
     cur_qseq: tl.constexpr,
     BLOCK_SEQ: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
-    MAX_LEN,
+    MAX_LEN, # Not tl.constexpt since we need CUDA Graph so we can not use .item()
     HAVE_FULL: tl.constexpr
 ):
     cur_batch = tl.program_id(0)
@@ -34,11 +34,11 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage2(
     acc = tl.zeros([BLOCK_DMODEL], dtype=tl.float32)
 
     offs_v = cur_batch * stride_mid_ob + cur_head * stride_mid_oh + cur_qseq * stride_mid_oqseq + offs_d
-    offs_logic = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + cur_qseq * stride_mid_o_eqseq
+    offs_logic = cur_batch * stride_mid_o_eb + cur_head * stride_mid_o_eh + cur_qseq
 
     for block_seq_n in range(0, block_n_size, 1):
         tv = tl.load(Mid_O + offs_v + block_seq_n * stride_mid_os)
-        tlogic = tl.load(Mid_O_LogExpSum + offs_logic + block_seq_n)
+        tlogic = tl.load(Mid_O_LogExpSum + offs_logic + block_seq_n * stride_mid_o_es)
         new_max_logic = tl.maximum(tlogic, max_logic)
         
         old_scale = tl.exp(max_logic - new_max_logic)
@@ -49,11 +49,11 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage2(
         max_logic = new_max_logic
 
     if HAVE_FULL:
-        offs_full_v = cur_batch * stride_full_ob + cur_head * stride_full_oh + cur_qseq * stride_full_oqseq + offs_d + offs_d
+        offs_full_v = cur_batch * stride_full_ob + cur_head * stride_full_oh + cur_qseq * stride_full_oqseq + offs_d
         offs_full_logic = cur_batch * stride_full_o_eb + cur_head * stride_full_o_eh + cur_qseq * stride_full_o_eqseq
 
-        tv = tl.load(Full_O + offs_full_v + block_seq_n * stride_full_os)
-        tlogic = tl.load(Full_O_LogExpSum + offs_full_logic + block_seq_n)
+        tv = tl.load(Full_O + offs_full_v)
+        tlogic = tl.load(Full_O_LogExpSum + offs_full_logic)
         new_max_logic = tl.maximum(tlogic, max_logic)
         
         old_scale = tl.exp(max_logic - new_max_logic)

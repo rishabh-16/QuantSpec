@@ -22,6 +22,7 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1(
     elem_per_int: tl.constexpr,
     gqa_group_size,
     cur_qseq: tl.constexpr,
+    QCACHE_LEN,
     BLOCK_SEQ: tl.constexpr, 
     BLOCK_SEQ_PER_INT: tl.constexpr,
     BLOCK_DMODEL: tl.constexpr,
@@ -35,7 +36,11 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1(
     cur_head = tl.program_id(1)
     seq_start_block = tl.program_id(2)
     # cur_kv_head = cur_head // gqa_group_size
-
+    
+    QCACHE_LEN_INT = tl.load(QCACHE_LEN)
+    if seq_start_block >= tl.cdiv(QCACHE_LEN_INT, BLOCK_SEQ): # Move this from triton's grid to the kernel to make it compatible with CUDA Graph & torch.compile
+        return
+    
     offs_q_d = tl.arange(0, BLOCK_DMODEL) # K do not quantize along the head_dim axis
     offs_k_d = tl.arange(0, BLOCK_DMODEL // elem_per_int) # K do not quantize along the head_dim axis
     offs_k_d_scale = tl.arange(0, BLOCK_DMODEL) # K do not quantize along the head_dim axis
@@ -176,6 +181,7 @@ def int8kv_verify_upperlower_flash_decode_stage1(
     cache_min_v,
     mid_out, 
     mid_out_logsumexp, 
+    max_seq_length,
     qcache_len, 
     block_seq,
     kbit, 
@@ -234,7 +240,7 @@ def int8kv_verify_upperlower_flash_decode_stage1(
 
     sm_scale = 1.0 / (Lk ** 0.5)
     batch, head_num = q.shape[0], q.shape[1]
-    grid = (batch, head_num, triton.cdiv(qcache_len, BLOCK_SEQ))
+    grid = (batch, head_num, triton.cdiv(max_seq_length, BLOCK_SEQ))
     gqa_group_size = q.shape[1] // cache_quant_k_upper.shape[1]
 
     q_seq_len = q.shape[2]
@@ -261,6 +267,7 @@ def int8kv_verify_upperlower_flash_decode_stage1(
             elem_per_int,
             gqa_group_size,
             cur_qseq=q_idx,
+            QCACHE_LEN=qcache_len,
             BLOCK_SEQ=BLOCK_SEQ, # How many int2/int4 elements a block should load
             BLOCK_SEQ_PER_INT=BLOCK_SEQ_PER_INT, # How many int32 elements a block should load
             BLOCK_DMODEL=Lk,
