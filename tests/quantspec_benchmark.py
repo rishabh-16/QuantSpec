@@ -16,6 +16,8 @@ from QuantSpec_magidec.Engine.backend_quantspec import LMBackend
 parser = argparse.ArgumentParser(description='Process model configuration and partitions.')
 parser.add_argument('--model', type=Path, default=Path("checkpoints/meta-llama/Llama-2-7b-hf/model.pth"), help='model')
 parser.add_argument('--model_name', type=str, default="meta-llama/Llama-2-7b-hf", help='model name')
+parser.add_argument('--marlin_path', type=Path, default=None, help='marlin path')
+parser.add_argument('--wq', action='store_true', help='Whether to use weight quantization.')
 parser.add_argument('--rank_group', nargs='+', type=int, help='Target group of ranks')
 parser.add_argument('--compile', action='store_true', help='Whether to compile the model.')
 
@@ -44,6 +46,8 @@ if use_tp:
     rank, global_group = init_dist()
     if rank != args.rank_group[0]:
         print = lambda *args, **kwargs: None
+else:
+    rank = 0
 
 setup_seed(args.seed)
 print(f"Using device={DEVICE}")
@@ -54,19 +58,18 @@ benchmark = args.benchmark
 checkpoint_path = args.model
 
 target_dec_list = [args.gamma + 1]
-draft_dec_list = [1,2]
+draft_dec_list = [1]
 
 # Load target model
 engine = LMBackend(dtype=DTYPE, device=DEVICE, dec_list=target_dec_list, draft_dec_list=draft_dec_list)
-engine.load_model(checkpoint_path, use_tp=use_tp, rank_group = args.rank_group, group=global_group)
+engine.load_model(checkpoint_path, use_tp=use_tp, rank_group = args.rank_group, group=global_group, quantize=args.wq, marlin_checkpoint=args.marlin_path)
 vocab_size = engine.model.config.vocab_size
 if args.compile:
     engine.compile()
 engine.setup_caches(max_batch_size=BATCH_SIZE, max_seq_length=MAX_LEN_TARGET)
 target_sample = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=args.gamma+1, dim=vocab_size)
 draft_sample = {}
-for i in [1, 2]:
-    draft_sample[i] = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=i, dim=vocab_size)
+draft_sample[1] = cuda_graph_for_sampling_argmax_batch(device=DEVICE, dtype=DTYPE, batch_size=BATCH_SIZE, idx_len=1, dim=vocab_size)
 
 # Load dataset
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
@@ -93,7 +96,12 @@ if benchmark:
 
 prof = contextlib.nullcontext()
 
+# Initialize counters for accepted tokens and total tokens
+acceptance_rates = []
+
 for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
+    accepted_tokens_count = 0
+    total_tokens_count = 0
     if step >= num_eval_steps:
         break
     input_ids = batch[0].to(DEVICE)
@@ -108,8 +116,6 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     
     tokens_buffer[:,:1] = sampling_argmax_batch(logits=logits)
     
-    next_double = False
-    double_buffer = None
     cachelens_update = None
 
     torch.cuda.synchronize()
@@ -127,15 +133,6 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 
         with prof:    
             for i in range(args.gamma):
-                if i == 0:
-                    if next_double:
-                        # The cachelens should increase 1 or 2
-                        next_tokens = draft_sample[2](engine.draft_inference(double_buffer, cachelen_update=cachelens_update))
-                        tokens_buffer[:,i+1:i+2] = next_tokens.gather(1, cachelens_update.view(-1,1) - 1)
-                        next_double = False
-                    else:
-                        tokens_buffer[:,i+1:i+2] = draft_sample[1](engine.draft_inference(tokens_buffer[:, i].view(-1,1)))
-                    continue
                 tokens_buffer[:,i+1:i+2] = draft_sample[1](engine.draft_inference(tokens_buffer[:, i].view(-1,1)))
 
         if benchmark:
@@ -147,20 +144,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 
         # Target Verification    
         target_logits = engine.inference(tokens_buffer)    
-        # import os
-        
-        # Only for debug proposes
-        # if os.environ.get('LONG1') == "1":
-        #     os.environ['IPY'] = '1'
 
-        # target_logits = engine.inference(tokens_buffer[:, :1])
-        # engine.cachelens -= 1
-
-        # if os.environ.get('LONG2') == "1":
-        #     os.environ['IPY'] = '1'
-
-        # debug_logits = engine.inference(tokens_buffer[:, :4])
-        
         # import IPython
         # IPython.embed()
 
@@ -184,7 +168,12 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
             accept_flags = accept_flags & flag_accept
             # Only increase accept_nums where accept_flags are still True
             accept_nums += accept_flags.int()
-            # Wether or not terminate
+            # Count accepted tokens
+            accepted_tokens_count += flag_accept.sum().item()
+            # Count total tokens processed
+            total_tokens_count += BATCH_SIZE
+
+            # Whether or not terminate
             condition = ((draft_token.unsqueeze(1) == eot_1) | (draft_token.unsqueeze(1) == eot_2)) & accept_flags
             if condition.any():
                 terminal = True
@@ -221,14 +210,6 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
         # Put Bonus tokens to the tokens buffer, and prepare the variables for next itr
         if not terminal:
             tokens_buffer[:, :1] = bonus_tokens
-            # if accept_nums.max() == args.gamma + 1:
-            #     next_double = True
-            #     double_buffer = torch.zeros((BATCH_SIZE, 2), device=DEVICE).long()
-            #     mask = (accept_nums == (args.gamma + 1)).squeeze()
-            #     double_buffer[:, 0] = torch.where(mask, tokens_buffer[:, -1], bonus_tokens[:, 0])
-            #     double_buffer[:, 1] = torch.where(mask, bonus_tokens[:, 0], torch.zeros_like(bonus_tokens[:, 0]))
-            #     non_zero_mask = double_buffer != 0
-            #     cachelens_update = non_zero_mask.sum(dim=1).flatten()
         
         if not terminal:
             if benchmark:
@@ -251,7 +232,8 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     if args.printoutput:
         for i in range(BATCH_SIZE):
             print(tokenizer.decode(output[i, args.prefix_len:num_nodes[i]]))
-    print("total time :{:.5f}s, time per iter :{:.5f}s, decoding step: {}, large model step: {}".format(total_time, total_time / target_steps, num_gen_tokens, target_steps))
+    print("acceptance rate: {:.2%}, total time :{:.5f}s, time per iter :{:.5f}s, decoding step: {}, large model step: {}".format(accepted_tokens_count / total_tokens_count, total_time, total_time / target_steps, num_gen_tokens, target_steps))
+    acceptance_rates.append(accepted_tokens_count / total_tokens_count)
     if benchmark:
         print("target time :{:.5f}s, draft time :{:.5f}s, verify loop : {}, avg generate len per sentence: {}".format(target_time/target_steps, draft_time / target_steps, verify_loop/target_steps, num_gen_tokens/target_steps/BATCH_SIZE))
     if step < 3:   # TODO: revert to 10?
@@ -264,6 +246,10 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
             verify_loop = 0.0
     if use_tp:
         dist.barrier()
+
+# Calculate acceptance rate
+acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if len(acceptance_rates) > 0 else 0
+print(f"Acceptance Rate: {acceptance_rate:.2%}")
 
 if hasattr(prof, "export_chrome_trace"):
     prof.export_chrome_trace(f"prof_selfspec.json")

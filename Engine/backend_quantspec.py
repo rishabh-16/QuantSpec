@@ -19,8 +19,10 @@ class LMBackend:
         self.q_cachelens = None
         self.residual_len = None
 
-    def load_model(self, checkpoints: str, use_tp: bool, rank_group=None, group = None):
-        self.model: Transformer = load_model_quantspec(checkpoint_path=checkpoints, device=self.device, precision=self.dtype, use_tp= use_tp, rank_group=rank_group, group = group)
+    def load_model(self, checkpoints: str, use_tp: bool, rank_group=None, group = None, quantize: bool = False, marlin_checkpoint: str = None):
+        if quantize:
+            assert marlin_checkpoint is not None, "Marlin checkpoint is required for quantization"
+        self.model: Transformer = load_model_quantspec(checkpoint_path=checkpoints, device=self.device, precision=self.dtype, use_tp= use_tp, rank_group=rank_group, group = group, quantize = quantize, marlin_checkpoint = marlin_checkpoint)
 
     @torch.inference_mode()
     def setup_caches(self, max_batch_size: int = 1, max_seq_length: int = 2048, **cache_kwargs):
@@ -44,7 +46,7 @@ class LMBackend:
         for key in self.draft_forward.keys():
             self.draft_forward[key] = torch.compile(self.draft_forward[key], mode="reduce-overhead", fullgraph=True)
         if encode:
-             self.prefill = torch.compile(self.prefill, mode="reduce-overhead", fullgraph=True)      
+             self.prefill = torch.compile(self.prefill, mode="reduce-overhead", fullgraph=True)
              
     @torch.inference_mode()
     def inference(self, input_ids: torch.LongTensor, benchmark = False):

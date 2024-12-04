@@ -124,6 +124,7 @@ torch.library.define(
     Tensor residual_len) -> Tensor",
 )
 
+
 @torch.library.impl("mylib::flash_decoding", "cuda")
 def flash_decoding(
     q,
@@ -459,14 +460,17 @@ def load_model_draft(checkpoint_path, device, precision, use_tp, rank_group=None
     model = model.to(device=device, dtype=precision)
     return model.eval()
 
-def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=None, group=None):
+def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=None, group=None, quantize: bool = False, marlin_checkpoint: str = None):
     import QuantSpec_magidec.Engine.model_quantspec as quantspec
-    with torch.device('meta'):
-        model = quantspec.Transformer.from_name(checkpoint_path.parent.name)
+    with torch.device('cpu'):
+        model = quantspec.Transformer.from_name(checkpoint_path.parent.name, quantize=quantize)
     checkpoint = torch.load(str(checkpoint_path), mmap=True, weights_only=True)
     if "model" in checkpoint and "stories" in str(checkpoint_path):
         checkpoint = checkpoint["model"]
-    model.load_state_dict(checkpoint, assign=True)
+    model.load_state_dict(checkpoint, assign=True, strict=False)
+    if quantize:
+        marlin_dict = torch.load(marlin_checkpoint)
+        model.load_marlin_dict(marlin_dict)
 
     if use_tp:
         from QuantSpec_magidec.Engine.tp import apply_tp

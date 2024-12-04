@@ -8,7 +8,7 @@ from torch.nn import functional as F
 import torch.distributed as dist
 import math 
 from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
-
+import marlin
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
         return n
@@ -31,6 +31,7 @@ class ModelArgs:
     low_freq_factor: int = None # added new
     high_freq_factor: int = None  # added new
     original_max_position_embeddings: int = None   # added new
+    quantize: bool = False
 
     def __post_init__(self):
         if self.n_local_heads == -1:
@@ -42,9 +43,14 @@ class ModelArgs:
         self.head_dim = self.dim // self.n_head
 
     @classmethod
-    def from_name(cls, name: str):
+    def from_name(cls, name: str, quantize: bool = False):
         if name in transformer_configs:
-            return cls(**transformer_configs[name])
+            if quantize:
+                config = transformer_configs[name]
+                config['quantize'] = True
+                return cls(**config)
+            else:
+                return cls(**transformer_configs[name])
         # fuzzy search
         config = [config for config in transformer_configs if config.lower() in str(name).lower()]
         # We may have two or more configs matched (e.g. "7B" and "Mistral-7B"). Find the best config match,
@@ -52,8 +58,9 @@ class ModelArgs:
         if len(config) > 1:
             config.sort(key=len, reverse=True)
             assert len(config[0]) != len(config[1]), name # make sure only one 'best' match
-        print(config)
         return cls(**transformer_configs[config[0]])
+    
+
 
 
 transformer_configs = {
@@ -66,6 +73,7 @@ transformer_configs = {
     "68m": dict(block_size=2048, n_layer=2, n_head=12, n_local_heads=12, dim=768, intermediate_size=3072, vocab_size=32000),
     "tinyllama": dict(block_size =2048, n_layer=22, n_head=32, n_local_heads=4, dim=2048, intermediate_size=5632, vocab_size=32000),
     "llama-3.1-8b": dict(block_size=131072, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000.0, scaling_factor=8, high_freq_factor=4, low_freq_factor=1, original_max_position_embeddings=8192),
+    "Meta-Llama-3.1-8B": dict(block_size=131072, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000.0, scaling_factor=8, high_freq_factor=4, low_freq_factor=1, original_max_position_embeddings=8192),
 }
 
 class KVCache(nn.Module):
@@ -206,6 +214,32 @@ class Transformer(nn.Module):
                                                   # new params
                                                   self.config.scaling_factor)
 
+    def load_marlin_dict(self, marlin_dict):
+        for key in marlin_dict.keys():
+            if 'mlp' in key:
+                # Get the corresponding engine model key by replacing mlp with feed_forward
+                engine_key = key.replace('mlp', 'feed_forward')
+                
+                # Map the gate_proj, up_proj, down_proj to w1, w2, w3 respectively
+                if 'gate_proj' in key:
+                    engine_key = engine_key.replace('gate_proj', 'w1_quantized')
+                elif 'up_proj' in key:
+                    engine_key = engine_key.replace('up_proj', 'w2_quantized') 
+                elif 'down_proj' in key:
+                    engine_key = engine_key.replace('down_proj', 'w3_quantized')
+                    
+                # Get the layer components from the key
+                parts = engine_key.split('.')
+                layer_idx = int(parts[2])
+                
+                # Get the corresponding module
+                layer = self.layers[layer_idx].feed_forward
+                module = getattr(layer, parts[-2])
+                
+                # Load the weights
+                param_name = parts[-1] # B or s
+                setattr(module, param_name, marlin_dict[key])
+
     def forward(self, idx: Tensor, input_pos: Optional[Tensor], cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
         assert self.freqs_cis is not None, "Caches must be initialized first"
         
@@ -240,8 +274,8 @@ class Transformer(nn.Module):
         return logits
 
     @classmethod
-    def from_name(cls, name: str):
-        return cls(ModelArgs.from_name(name))
+    def from_name(cls, name: str, quantize: bool = False):
+        return cls(ModelArgs.from_name(name, quantize))
 
 
 class TransformerBlock(nn.Module):
@@ -442,6 +476,13 @@ class FeedForward(nn.Module):
         self.w1 = nn.Linear(config.dim, config.intermediate_size, bias=False)
         self.w3 = nn.Linear(config.dim, config.intermediate_size, bias=False)
         self.w2 = nn.Linear(config.intermediate_size, config.dim, bias=False)
+        self.quantize = config.quantize
+        
+
+        if config.quantize:
+            self.w1_quantized = marlin.Layer(config.dim, config.intermediate_size, groupsize=128)
+            self.w3_quantized = marlin.Layer(config.dim, config.intermediate_size, groupsize=128)
+            self.w2_quantized = marlin.Layer(config.intermediate_size, config.dim, groupsize=128)
         self.process_group = None
 
     def forward(self, x: Tensor) -> Tensor:
@@ -451,7 +492,10 @@ class FeedForward(nn.Module):
         return y
     
     def draft_forward(self, x: Tensor) -> Tensor:
-        y = self.w2(F.silu(self.w1(x)) * self.w3(x))
+        if self.quantize:
+            y = self.w2_quantized(F.silu(self.w1_quantized(x)) * self.w3_quantized(x))
+        else:
+            y = self.w2(F.silu(self.w1(x)) * self.w3(x))
         if self.process_group != None:
             dist.all_reduce(y)
         return y
