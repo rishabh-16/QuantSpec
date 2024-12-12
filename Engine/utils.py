@@ -98,8 +98,7 @@ def flash_verification_abstract(
     qcache_len,
     residual_len
 ):
-    return torch.empty_like(q)
-
+    return torch.empty(q.shape, dtype=q.dtype, device=q.device)
 
 torch.library.define(
     "mylib::flash_decoding",
@@ -462,7 +461,7 @@ def load_model_draft(checkpoint_path, device, precision, use_tp, rank_group=None
 
 def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=None, group=None, quantize: bool = False, marlin_checkpoint: str = None):
     import QuantSpec_magidec.Engine.model_quantspec as quantspec
-    with torch.device('cpu'):
+    with torch.device('meta'):
         model = quantspec.Transformer.from_name(checkpoint_path.parent.name, quantize=quantize)
     checkpoint = torch.load(str(checkpoint_path), mmap=True, weights_only=True)
     if "model" in checkpoint and "stories" in str(checkpoint_path):

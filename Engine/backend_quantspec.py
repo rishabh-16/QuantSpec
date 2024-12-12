@@ -52,8 +52,10 @@ class LMBackend:
     def inference(self, input_ids: torch.LongTensor, benchmark = False):
             dec_len = input_ids.shape[1]
             position_ids = self.cachelens.view(-1,1) + torch.arange(dec_len, device=self.device).unsqueeze(0).repeat(self.batch_size,1)
+            if dec_len not in self.model_forward.keys():
+                raise ValueError(f"Decoding length {dec_len} not supported")
             logits = self.model_forward[dec_len](
-                model=self.model, 
+                model=self.model,  
                 x=input_ids.clone(),
                 input_pos=position_ids.clone(), 
                 cache_seqlens=self.cachelens.clone(),

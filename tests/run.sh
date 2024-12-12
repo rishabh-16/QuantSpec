@@ -12,7 +12,7 @@ PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun 
     tests/quantspec_benchmark.py \
     --model /home/rishabhtiwari/cache/checkpoints/meta-llama/Meta-Llama-3.1-8B/model.pth \
     --model_name meta-llama/Meta-Llama-3.1-8B \
-    --marlin_path /home/rishabhtiwari/cache/llama3_8b_checkpoint.pt.marlin.g128 \
+    --marlin_path /home/rishabhtiwari/cache/marlin/llama3_8b_checkpoint.pt.marlin.g128 \
     --rank_group $(seq -s ' ' 0 $(($(echo $1 | tr ',' ' ' | wc -w) - 1))) \
     --gamma 6 \
     --B 1 \
