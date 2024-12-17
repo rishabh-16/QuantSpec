@@ -459,17 +459,41 @@ def load_model_draft(checkpoint_path, device, precision, use_tp, rank_group=None
     model = model.to(device=device, dtype=precision)
     return model.eval()
 
+def add_marlin_dict(checkpoint, marlin_dict, replacements=None):
+    if replacements is None:
+        replacements = {
+            'mlp': 'feed_forward',
+            'model.layers': 'layers',
+            'gate_proj': 'w1_quantized',
+            'up_proj': 'w3_quantized',
+            'down_proj': 'w2_quantized'
+        }
+
+    for key in marlin_dict:
+        if 'mlp' in key:
+            engine_key = key
+            for old, new in replacements.items():
+                if old in engine_key:
+                    engine_key = engine_key.replace(old, new)
+            checkpoint[engine_key] = marlin_dict[key]
+
+    return checkpoint
+
 def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=None, group=None, quantize: bool = False, marlin_checkpoint: str = None):
     import QuantSpec_magidec.Engine.model_quantspec as quantspec
-    with torch.device('meta'):
+    with torch.device(device):
         model = quantspec.Transformer.from_name(checkpoint_path.parent.name, quantize=quantize)
     checkpoint = torch.load(str(checkpoint_path), mmap=True, weights_only=True)
     if "model" in checkpoint and "stories" in str(checkpoint_path):
         checkpoint = checkpoint["model"]
-    model.load_state_dict(checkpoint, assign=True, strict=False)
     if quantize:
-        marlin_dict = torch.load(marlin_checkpoint)
-        model.load_marlin_dict(marlin_dict)
+        marlin_dict = torch.load(marlin_checkpoint, mmap=True, weights_only=True)
+        checkpoint = add_marlin_dict(checkpoint, marlin_dict)
+
+    model.load_state_dict(checkpoint, assign=True)
+    # if quantize:
+    #     marlin_dict = torch.load(marlin_checkpoint)
+    #     model.load_marlin_dict(marlin_dict)
 
     if use_tp:
         from QuantSpec_magidec.Engine.tp import apply_tp

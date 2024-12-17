@@ -70,10 +70,10 @@ class LMBackend:
             position_ids = self.cachelens.view(-1,1) + torch.arange(dec_len, device=self.device).unsqueeze(0).repeat(self.batch_size,1)
             logits = self.draft_forward[dec_len](
                 model=self.model, 
-                x=input_ids.clone(),
-                input_pos=position_ids.clone(), 
-                cache_seqlens=self.cachelens.clone(),
-                qcache_seqlens=self.q_cachelens.clone()) if dec_len in self.draft_forward.keys() else self.model.draft_forward(input_ids.clone(), position_ids.clone(), self.cachelens.clone(), self.q_cachelens.clone())
+                x=input_ids,
+                input_pos=position_ids, 
+                cache_seqlens=self.cachelens,
+                qcache_seqlens=self.q_cachelens) if dec_len in self.draft_forward.keys() else self.model.draft_forward(input_ids.clone(), position_ids.clone(), self.cachelens.clone(), self.q_cachelens.clone())
             if not benchmark:
                 if cachelen_update == None:
                     self.cachelens += dec_len

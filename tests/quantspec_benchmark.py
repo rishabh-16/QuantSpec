@@ -52,7 +52,7 @@ else:
 setup_seed(args.seed)
 print(f"Using device={DEVICE}")
 MAX_LEN_TARGET = args.prefix_len + args.gen_len + args.gamma
-DTYPE = torch.bfloat16
+DTYPE = torch.half
 BATCH_SIZE = args.B
 benchmark = args.benchmark
 checkpoint_path = args.model
@@ -232,7 +232,8 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     if args.printoutput:
         for i in range(BATCH_SIZE):
             print(tokenizer.decode(output[i, args.prefix_len:num_nodes[i]]))
-    print("acceptance rate: {:.2%}, total time :{:.5f}s, time per iter :{:.5f}s, decoding step: {}, large model step: {}".format(accepted_tokens_count / total_tokens_count, total_time, total_time / target_steps, num_gen_tokens, target_steps))
+    if benchmark:
+        print("acceptance rate: {:.2%}, total time :{:.5f}s, time per iter :{:.5f}s, decoding step: {}, large model step: {}".format(accepted_tokens_count / total_tokens_count, total_time, total_time / target_steps, num_gen_tokens, target_steps))
     acceptance_rates.append(accepted_tokens_count / total_tokens_count)
     if benchmark:
         print("target time :{:.5f}s, draft time :{:.5f}s, verify loop : {}, avg generate len per sentence: {}".format(target_time/target_steps, draft_time / target_steps, verify_loop/target_steps, num_gen_tokens/target_steps/BATCH_SIZE))
@@ -250,6 +251,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 # Calculate acceptance rate
 acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if len(acceptance_rates) > 0 else 0
 print(f"Acceptance Rate: {acceptance_rate:.2%}")
+print(f"method latency: {total_time/num_gen_tokens}")
 
 if hasattr(prof, "export_chrome_trace"):
     prof.export_chrome_trace(f"prof_selfspec.json")

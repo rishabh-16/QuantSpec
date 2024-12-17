@@ -65,6 +65,7 @@ class ModelArgs:
 
 transformer_configs = {
     "llama-2-7b": dict(block_size=4096, n_layer=32, n_head=32, dim=4096),
+    "Llama-2-7b-hf": dict(block_size=4096, n_layer=32, n_head=32, dim=4096),
     'llama-2-7b-32k': dict(block_size=32768, n_layer=32, dim= 4096, vocab_size=32000, scaling_factor=8),
     "llama-2-13b": dict(block_size=4096, n_layer=40, n_head=40, dim=5120),
     "llama-2-70b": dict(block_size=4096, n_layer=80, n_head=64, dim=8192, n_local_heads=8, intermediate_size=28672),
@@ -179,7 +180,6 @@ class Transformer(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
         super().__init__()
         self.config = config
-
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.dim)
         self.layers = nn.ModuleList(TransformerBlock(config) for _ in range(config.n_layer))
         self.norm = RMSNorm(config.dim, eps=config.norm_eps)
@@ -224,9 +224,9 @@ class Transformer(nn.Module):
                 if 'gate_proj' in key:
                     engine_key = engine_key.replace('gate_proj', 'w1_quantized')
                 elif 'up_proj' in key:
-                    engine_key = engine_key.replace('up_proj', 'w2_quantized') 
+                    engine_key = engine_key.replace('up_proj', 'w3_quantized') 
                 elif 'down_proj' in key:
-                    engine_key = engine_key.replace('down_proj', 'w3_quantized')
+                    engine_key = engine_key.replace('down_proj', 'w2_quantized')
                     
                 # Get the layer components from the key
                 parts = engine_key.split('.')
