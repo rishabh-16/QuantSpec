@@ -3,6 +3,196 @@ import numpy as np
 import random
 from torch.nn.functional import softmax
 from flash_attn import flash_attn_with_kvcache
+from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
+
+from QuantSpec_magidec.kernels.flashdecoding.int8_upperlower.int8kv_upperlower_flash_decoding import token_decode_attention_int8kv_upperlower_flash_decoding
+
+
+
+torch.library.define(
+    "mylib::flash_verification",
+    "(Tensor q, \
+    Tensor(a!) cache_quant_k_upper, \
+    Tensor(b!) cache_quant_k_lower, \
+    Tensor(c!) cache_scale_k, \
+    Tensor(d!) cache_min_k, \
+    Tensor(e!) cache_quant_v_upper, \
+    Tensor(f!) cache_quant_v_lower, \
+    Tensor(g!) cache_scale_v, \
+    Tensor(h!) cache_min_v, \
+    Scalar kbit, \
+    Scalar vbit, \
+    Scalar group_size, \
+    Tensor(i!) full_k, \
+    Tensor(j!) full_v, \
+    Scalar precision, \
+    Scalar max_seq_length, \
+    Scalar max_residual_len, \
+    Tensor qcache_len, \
+    Tensor residual_len) -> Tensor",
+)
+
+@torch.library.impl("mylib::flash_verification", "cuda")
+def flash_verification(
+    q,
+    cache_quant_k_upper,
+    cache_quant_k_lower,
+    cache_scale_k,
+    cache_min_k,
+    cache_quant_v_upper,
+    cache_quant_v_lower,
+    cache_scale_v,
+    cache_min_v,
+    kbit,
+    vbit,
+    group_size,
+    full_k,
+    full_v,
+    precision,
+    max_seq_length,
+    max_residual_len,
+    qcache_len,
+    residual_len
+):
+    return token_decode_attention_int8kv_verify_upperlower_flash_decoding(
+        q=q,
+        cache_quant_k_upper=cache_quant_k_upper,
+        cache_quant_k_lower=cache_quant_k_lower,
+        cache_scale_k=cache_scale_k,
+        cache_min_k=cache_min_k,
+        cache_quant_v_upper=cache_quant_v_upper,
+        cache_quant_v_lower=cache_quant_v_lower,
+        cache_scale_v=cache_scale_v,
+        cache_min_v=cache_min_v,
+        kbit=kbit,
+        vbit=vbit,
+        group_size=group_size,
+        full_k=full_k,
+        full_v=full_v,
+        precision=precision,
+        max_seq_length=max_seq_length,
+        max_residual_len=max_residual_len,
+        qcache_len=qcache_len,
+        residual_len=residual_len
+    )
+
+@torch.library.impl_abstract("mylib::flash_verification")
+def flash_verification_abstract(
+    q,
+    cache_quant_k_upper,
+    cache_quant_k_lower,
+    cache_scale_k,
+    cache_min_k,
+    cache_quant_v_upper,
+    cache_quant_v_lower,
+    cache_scale_v,
+    cache_min_v,
+    kbit,
+    vbit,
+    group_size,
+    full_k,
+    full_v,
+    precision,
+    max_seq_length,
+    max_residual_len,
+    qcache_len,
+    residual_len
+):
+    return torch.empty(q.shape, dtype=q.dtype, device=q.device)
+
+torch.library.define(
+    "mylib::flash_decoding",
+    "(Tensor q, \
+    Tensor(a!) cache_quant_k_upper, \
+    Tensor(b!) cache_quant_k_lower, \
+    Tensor(c!) cache_scale_k, \
+    Tensor(d!) cache_min_k, \
+    Tensor(e!) cache_quant_v_upper, \
+    Tensor(f!) cache_quant_v_lower, \
+    Tensor(g!) cache_scale_v, \
+    Tensor(h!) cache_min_v, \
+    Scalar kbit, \
+    Scalar vbit, \
+    Scalar group_size, \
+    Tensor(i!) full_k, \
+    Tensor(j!) full_v, \
+    Scalar precision, \
+    Scalar max_seq_length, \
+    Scalar max_residual_len, \
+    Tensor qcache_len, \
+    Tensor residual_len) -> Tensor",
+)
+
+
+@torch.library.impl("mylib::flash_decoding", "cuda")
+def flash_decoding(
+    q,
+    cache_quant_k_upper,
+    cache_quant_k_lower,
+    cache_scale_k,
+    cache_min_k,
+    cache_quant_v_upper,
+    cache_quant_v_lower,
+    cache_scale_v,
+    cache_min_v,
+    kbit,
+    vbit,
+    group_size,
+    full_k,
+    full_v,
+    precision,
+    max_seq_length,
+    max_residual_len,
+    qcache_len,
+    residual_len
+):
+    return token_decode_attention_int8kv_upperlower_flash_decoding(
+        q=q,
+        cache_quant_k_upper=cache_quant_k_upper,
+        cache_quant_k_lower=cache_quant_k_lower,
+        cache_scale_k=cache_scale_k,
+        cache_min_k=cache_min_k,
+        cache_quant_v_upper=cache_quant_v_upper,
+        cache_quant_v_lower=cache_quant_v_lower,
+        cache_scale_v=cache_scale_v,
+        cache_min_v=cache_min_v,
+        kbit=kbit,
+        vbit=vbit,
+        group_size=group_size,
+        full_k=full_k,
+        full_v=full_v,
+        precision=precision,
+        max_seq_length=max_seq_length,
+        max_residual_len=max_residual_len,
+        qcache_len=qcache_len,
+        residual_len=residual_len
+    )
+
+@torch.library.impl_abstract("mylib::flash_decoding")
+def flash_decoding_abstract(
+    q,
+    cache_quant_k_upper,
+    cache_quant_k_lower,
+    cache_scale_k,
+    cache_min_k,
+    cache_quant_v_upper,
+    cache_quant_v_lower,
+    cache_scale_v,
+    cache_min_v,
+    kbit,
+    vbit,
+    group_size,
+    full_k,
+    full_v,
+    precision,
+    max_seq_length,
+    max_residual_len,
+    qcache_len,
+    residual_len
+):
+    return torch.empty_like(q)
+
+
 
 torch.library.define(
     "mylib::custom_func",
@@ -269,14 +459,41 @@ def load_model_draft(checkpoint_path, device, precision, use_tp, rank_group=None
     model = model.to(device=device, dtype=precision)
     return model.eval()
 
-def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=None, group=None):
+def add_marlin_dict(checkpoint, marlin_dict, replacements=None):
+    if replacements is None:
+        replacements = {
+            'mlp': 'feed_forward',
+            'model.layers': 'layers',
+            'gate_proj': 'w1_quantized',
+            'up_proj': 'w3_quantized',
+            'down_proj': 'w2_quantized'
+        }
+
+    for key in marlin_dict:
+        if 'mlp' in key:
+            engine_key = key
+            for old, new in replacements.items():
+                if old in engine_key:
+                    engine_key = engine_key.replace(old, new)
+            checkpoint[engine_key] = marlin_dict[key]
+
+    return checkpoint
+
+def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=None, group=None, quantize: bool = False, marlin_checkpoint: str = None):
     import QuantSpec_magidec.Engine.model_quantspec as quantspec
-    with torch.device('meta'):
-        model = quantspec.Transformer.from_name(checkpoint_path.parent.name)
+    with torch.device(device):
+        model = quantspec.Transformer.from_name(checkpoint_path.parent.name, quantize=quantize)
     checkpoint = torch.load(str(checkpoint_path), mmap=True, weights_only=True)
     if "model" in checkpoint and "stories" in str(checkpoint_path):
         checkpoint = checkpoint["model"]
+    if quantize:
+        marlin_dict = torch.load(marlin_checkpoint, mmap=True, weights_only=True)
+        checkpoint = add_marlin_dict(checkpoint, marlin_dict)
+
     model.load_state_dict(checkpoint, assign=True)
+    # if quantize:
+    #     marlin_dict = torch.load(marlin_checkpoint)
+    #     model.load_marlin_dict(marlin_dict)
 
     if use_tp:
         from QuantSpec_magidec.Engine.tp import apply_tp

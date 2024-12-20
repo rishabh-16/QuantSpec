@@ -8,11 +8,7 @@ from torch.nn import functional as F
 import torch.distributed as dist
 import math 
 from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
-from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
-from QuantSpec_magidec.kernels.flashdecoding.int8_upperlower.int8kv_upperlower_flash_decoding import token_decode_attention_int8kv_upperlower_flash_decoding
-
-# from QuantSpec_magidec.kernels.flashdecoding.int8_failed_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
-
+import marlin
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
         return n
@@ -35,6 +31,7 @@ class ModelArgs:
     low_freq_factor: int = None # added new
     high_freq_factor: int = None  # added new
     original_max_position_embeddings: int = None   # added new
+    quantize: bool = False
 
     def __post_init__(self):
         if self.n_local_heads == -1:
@@ -46,9 +43,14 @@ class ModelArgs:
         self.head_dim = self.dim // self.n_head
 
     @classmethod
-    def from_name(cls, name: str):
+    def from_name(cls, name: str, quantize: bool = False):
         if name in transformer_configs:
-            return cls(**transformer_configs[name])
+            if quantize:
+                config = transformer_configs[name]
+                config['quantize'] = True
+                return cls(**config)
+            else:
+                return cls(**transformer_configs[name])
         # fuzzy search
         config = [config for config in transformer_configs if config.lower() in str(name).lower()]
         # We may have two or more configs matched (e.g. "7B" and "Mistral-7B"). Find the best config match,
@@ -56,12 +58,14 @@ class ModelArgs:
         if len(config) > 1:
             config.sort(key=len, reverse=True)
             assert len(config[0]) != len(config[1]), name # make sure only one 'best' match
-        print(config)
         return cls(**transformer_configs[config[0]])
+    
+
 
 
 transformer_configs = {
     "llama-2-7b": dict(block_size=4096, n_layer=32, n_head=32, dim=4096),
+    "Llama-2-7b-hf": dict(block_size=4096, n_layer=32, n_head=32, dim=4096),
     'llama-2-7b-32k': dict(block_size=32768, n_layer=32, dim= 4096, vocab_size=32000, scaling_factor=8),
     "llama-2-13b": dict(block_size=4096, n_layer=40, n_head=40, dim=5120),
     "llama-2-70b": dict(block_size=4096, n_layer=80, n_head=64, dim=8192, n_local_heads=8, intermediate_size=28672),
@@ -70,6 +74,7 @@ transformer_configs = {
     "68m": dict(block_size=2048, n_layer=2, n_head=12, n_local_heads=12, dim=768, intermediate_size=3072, vocab_size=32000),
     "tinyllama": dict(block_size =2048, n_layer=22, n_head=32, n_local_heads=4, dim=2048, intermediate_size=5632, vocab_size=32000),
     "llama-3.1-8b": dict(block_size=131072, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000.0, scaling_factor=8, high_freq_factor=4, low_freq_factor=1, original_max_position_embeddings=8192),
+    "Meta-Llama-3.1-8B": dict(block_size=131072, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000.0, scaling_factor=8, high_freq_factor=4, low_freq_factor=1, original_max_position_embeddings=8192),
 }
 
 class KVCache(nn.Module):
@@ -175,7 +180,6 @@ class Transformer(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
         super().__init__()
         self.config = config
-
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.dim)
         self.layers = nn.ModuleList(TransformerBlock(config) for _ in range(config.n_layer))
         self.norm = RMSNorm(config.dim, eps=config.norm_eps)
@@ -209,6 +213,32 @@ class Transformer(nn.Module):
             self.freqs_cis = precompute_freqs_cis(self.config.block_size, self.config.dim // self.config.n_head, self.config.rope_base,dtype,
                                                   # new params
                                                   self.config.scaling_factor)
+
+    def load_marlin_dict(self, marlin_dict):
+        for key in marlin_dict.keys():
+            if 'mlp' in key:
+                # Get the corresponding engine model key by replacing mlp with feed_forward
+                engine_key = key.replace('mlp', 'feed_forward')
+                
+                # Map the gate_proj, up_proj, down_proj to w1, w2, w3 respectively
+                if 'gate_proj' in key:
+                    engine_key = engine_key.replace('gate_proj', 'w1_quantized')
+                elif 'up_proj' in key:
+                    engine_key = engine_key.replace('up_proj', 'w3_quantized') 
+                elif 'down_proj' in key:
+                    engine_key = engine_key.replace('down_proj', 'w2_quantized')
+                    
+                # Get the layer components from the key
+                parts = engine_key.split('.')
+                layer_idx = int(parts[2])
+                
+                # Get the corresponding module
+                layer = self.layers[layer_idx].feed_forward
+                module = getattr(layer, parts[-2])
+                
+                # Load the weights
+                param_name = parts[-1] # B or s
+                setattr(module, param_name, marlin_dict[key])
 
     def forward(self, idx: Tensor, input_pos: Optional[Tensor], cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
         assert self.freqs_cis is not None, "Caches must be initialized first"
@@ -244,8 +274,8 @@ class Transformer(nn.Module):
         return logits
 
     @classmethod
-    def from_name(cls, name: str):
-        return cls(ModelArgs.from_name(name))
+    def from_name(cls, name: str, quantize: bool = False):
+        return cls(ModelArgs.from_name(name, quantize))
 
 
 class TransformerBlock(nn.Module):
@@ -332,7 +362,7 @@ class Attention(nn.Module):
         
         repeat_factor = self.n_head // self.n_local_heads
 
-        y = token_decode_attention_int8kv_verify_upperlower_flash_decoding(
+        y = torch.ops.mylib.flash_verification(
             q=q,
             cache_quant_k_upper=self.repeat_kv(self.kv_cache.qk_cache_ubits, repeat_factor),
             cache_quant_k_lower=self.repeat_kv(self.kv_cache.qk_cache_lbits, repeat_factor), 
@@ -347,8 +377,6 @@ class Attention(nn.Module):
             group_size=self.kv_cache.group_size,
             full_k=self.repeat_kv(self.kv_cache.k_cache, repeat_factor),
             full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
-            out=None,
-            alloc_tensor_func=torch.zeros,
             precision=8,
             max_seq_length=self.kv_cache.max_seq_length,
             max_residual_len=2 * self.kv_cache.residual_len + 1,
@@ -412,7 +440,7 @@ class Attention(nn.Module):
 
         # y = torch.ops.mylib.custom_func_2(q, k, v)
 
-        y = token_decode_attention_int8kv_upperlower_flash_decoding(
+        y = torch.ops.mylib.flash_decoding(
             q=q,
             cache_quant_k_upper=self.repeat_kv(self.kv_cache.qk_cache_ubits, repeat_factor),
             cache_quant_k_lower=self.repeat_kv(self.kv_cache.qk_cache_lbits, repeat_factor), 
@@ -427,35 +455,13 @@ class Attention(nn.Module):
             group_size=self.kv_cache.group_size,
             full_k=self.repeat_kv(self.kv_cache.k_cache, repeat_factor),
             full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
-            out=None,
-            alloc_tensor_func=torch.zeros,
-            precision=8,
+            precision=4,
             max_seq_length=self.kv_cache.max_seq_length,
             max_residual_len=2 * self.kv_cache.residual_len + 1,
             qcache_len=qcache_seqlens[0],
             residual_len=cache_seqlens[0] - qcache_seqlens[0],
         )
         
-        # y = token_decode_attention_int8kv_upperlower_flash_decoding(
-        #     q=q,
-        #     cache_quant_k_upper=self.repeat_kv(self.kv_cache.qk_cache_ubits[:, :, :qcache_seqlens], repeat_factor),
-        #     cache_quant_k_lower=self.repeat_kv(self.kv_cache.qk_cache_lbits[:, :, :qcache_seqlens], repeat_factor), 
-        #     cache_scale_k=self.repeat_kv(self.kv_cache.kscale_cache[:, :, :qcache_seqlens//self.kv_cache.group_size], repeat_factor),
-        #     cache_min_k=self.repeat_kv(self.kv_cache.kmin_cache[:, :, :qcache_seqlens//self.kv_cache.group_size], repeat_factor),
-        #     cache_quant_v_upper=self.repeat_kv(self.kv_cache.qval_trans_cache_ubits[:, :, :, :qcache_seqlens//(8//self.kv_cache.v_bits)], repeat_factor),
-        #     cache_quant_v_lower=self.repeat_kv(self.kv_cache.qval_trans_cache_lbits[:, :, :, :qcache_seqlens//(8//self.kv_cache.v_bits)], repeat_factor),
-        #     cache_scale_v=self.repeat_kv(self.kv_cache.valscale_cache[:, :, :, :qcache_seqlens], repeat_factor),
-        #     cache_min_v=self.repeat_kv(self.kv_cache.valmin_cache[:, :, :, :qcache_seqlens], repeat_factor),
-        #     kbit=self.kv_cache.k_bits,
-        #     vbit=self.kv_cache.v_bits,
-        #     group_size=self.kv_cache.group_size,
-        #     full_k=self.repeat_kv(self.kv_cache.k_cache[:, :, :cache_seqlens], repeat_factor),
-        #     full_v=self.repeat_kv(self.kv_cache.v_cache[:, :, :cache_seqlens], repeat_factor),
-        #     out=None,
-        #     alloc_tensor_func=torch.zeros,
-        #     precision=8,
-        # )
-
         y = y.transpose(1, 2).reshape(bsz, seqlen, self.dim).contiguous()
 
         y = self.wo(y)
@@ -470,6 +476,13 @@ class FeedForward(nn.Module):
         self.w1 = nn.Linear(config.dim, config.intermediate_size, bias=False)
         self.w3 = nn.Linear(config.dim, config.intermediate_size, bias=False)
         self.w2 = nn.Linear(config.intermediate_size, config.dim, bias=False)
+        self.quantize = config.quantize
+        
+
+        if config.quantize:
+            self.w1_quantized = marlin.Layer(config.dim, config.intermediate_size, groupsize=128)
+            self.w3_quantized = marlin.Layer(config.dim, config.intermediate_size, groupsize=128)
+            self.w2_quantized = marlin.Layer(config.intermediate_size, config.dim, groupsize=128)
         self.process_group = None
 
     def forward(self, x: Tensor) -> Tensor:
@@ -479,7 +492,10 @@ class FeedForward(nn.Module):
         return y
     
     def draft_forward(self, x: Tensor) -> Tensor:
-        y = self.w2(F.silu(self.w1(x)) * self.w3(x))
+        if self.quantize:
+            y = self.w2_quantized(F.silu(self.w1_quantized(x)) * self.w3_quantized(x))
+        else:
+            y = self.w2(F.silu(self.w1(x)) * self.w3(x))
         if self.process_group != None:
             dist.all_reduce(y)
         return y

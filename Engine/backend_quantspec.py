@@ -19,8 +19,10 @@ class LMBackend:
         self.q_cachelens = None
         self.residual_len = None
 
-    def load_model(self, checkpoints: str, use_tp: bool, rank_group=None, group = None):
-        self.model: Transformer = load_model_quantspec(checkpoint_path=checkpoints, device=self.device, precision=self.dtype, use_tp= use_tp, rank_group=rank_group, group = group)
+    def load_model(self, checkpoints: str, use_tp: bool, rank_group=None, group = None, quantize: bool = False, marlin_checkpoint: str = None):
+        if quantize:
+            assert marlin_checkpoint is not None, "Marlin checkpoint is required for quantization"
+        self.model: Transformer = load_model_quantspec(checkpoint_path=checkpoints, device=self.device, precision=self.dtype, use_tp= use_tp, rank_group=rank_group, group = group, quantize = quantize, marlin_checkpoint = marlin_checkpoint)
 
     @torch.inference_mode()
     def setup_caches(self, max_batch_size: int = 1, max_seq_length: int = 2048, **cache_kwargs):
@@ -44,14 +46,16 @@ class LMBackend:
         for key in self.draft_forward.keys():
             self.draft_forward[key] = torch.compile(self.draft_forward[key], mode="reduce-overhead", fullgraph=True)
         if encode:
-             self.prefill = torch.compile(self.prefill, mode="reduce-overhead", fullgraph=True)      
+             self.prefill = torch.compile(self.prefill, mode="reduce-overhead", fullgraph=True)
              
     @torch.inference_mode()
     def inference(self, input_ids: torch.LongTensor, benchmark = False):
             dec_len = input_ids.shape[1]
             position_ids = self.cachelens.view(-1,1) + torch.arange(dec_len, device=self.device).unsqueeze(0).repeat(self.batch_size,1)
+            if dec_len not in self.model_forward.keys():
+                raise ValueError(f"Decoding length {dec_len} not supported")
             logits = self.model_forward[dec_len](
-                model=self.model, 
+                model=self.model,  
                 x=input_ids.clone(),
                 input_pos=position_ids.clone(), 
                 cache_seqlens=self.cachelens.clone(),
@@ -66,10 +70,10 @@ class LMBackend:
             position_ids = self.cachelens.view(-1,1) + torch.arange(dec_len, device=self.device).unsqueeze(0).repeat(self.batch_size,1)
             logits = self.draft_forward[dec_len](
                 model=self.model, 
-                x=input_ids.clone(),
-                input_pos=position_ids.clone(), 
-                cache_seqlens=self.cachelens.clone(),
-                qcache_seqlens=self.q_cachelens.clone()) if dec_len in self.draft_forward.keys() else self.model.draft_forward(input_ids.clone(), position_ids.clone(), self.cachelens.clone(), self.q_cachelens.clone())
+                x=input_ids,
+                input_pos=position_ids, 
+                cache_seqlens=self.cachelens,
+                qcache_seqlens=self.q_cachelens) if dec_len in self.draft_forward.keys() else self.model.draft_forward(input_ids.clone(), position_ids.clone(), self.cachelens.clone(), self.q_cachelens.clone())
             if not benchmark:
                 if cachelen_update == None:
                     self.cachelens += dec_len

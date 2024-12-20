@@ -54,7 +54,7 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         How many quantized elements will be packed together into a int32 element.
     """
     # If quantization group size is 32 and batch size = 1, This should be set to 256
-    # assert precision == 4, f"Precision should be 4, not {precision}"
+    assert precision == 4, f"Precision should be 4, not {precision}"
     
     BLOCK_SEQ = 128
     assert kbit == vbit, "We only support kbit == vbit in [2, 4]"

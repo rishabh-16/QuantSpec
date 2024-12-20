@@ -157,6 +157,10 @@ def _apply_tp_ffn(mlp: FeedForward, rank_group, group) -> None:
     _apply_tp_linear_mlp(mlp.w1, "colwise", rank_group=rank_group)
     _apply_tp_linear_mlp(mlp.w3, "colwise", rank_group=rank_group)
     _apply_tp_linear_mlp(mlp.w2, "rowwise", rank_group=rank_group)
+    if hasattr(mlp, "w1_quantized"):
+        _apply_tp_linear_mlp(mlp.w1_quantized, "colwise", rank_group=rank_group)
+        _apply_tp_linear_mlp(mlp.w3_quantized, "colwise", rank_group=rank_group)
+        _apply_tp_linear_mlp(mlp.w2_quantized, "rowwise", rank_group=rank_group)
     mlp.process_group = group
 
     # mlp.register_forward_hook(lambda _module, _input, output: funcol.all_reduce(

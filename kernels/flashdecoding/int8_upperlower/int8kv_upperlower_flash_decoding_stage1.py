@@ -239,7 +239,9 @@ def int8kv_upperlower_flash_decode_stage1(
 
     sm_scale = 1.0 / (Lk ** 0.5)
     batch, head_num = q.shape[0], q.shape[1]
+
     grid = (batch, head_num, triton.cdiv(max_seq_length, BLOCK_SEQ))
+
     gqa_group_size = q.shape[1] // cache_quant_k_upper.shape[1]
 
     asm = _fwd_kernel_int8kv_upperlower_flash_decode_stage1[grid](
