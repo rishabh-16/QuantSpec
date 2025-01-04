@@ -11,6 +11,7 @@ from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
 import argparse
 from QuantSpec_magidec.Engine.backend import LMBackend
+from QuantSpec_magidec.Engine.utils import spec_stream
 
 parser = argparse.ArgumentParser(description='Process model configuration and partitions.')
 parser.add_argument('--model', type=Path, default=Path("checkpoints/meta-llama/Llama-2-7b-hf/model.pth"), help='model')
@@ -60,7 +61,7 @@ print(f"eot_1: {eot_1}, eot_2: {eot_2}")
 
 dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
-num_eval_steps = min(10, len(dataloader))
+num_eval_steps = min(4, len(dataloader))
 
 total_time = 0.0
 model_steps = 0
@@ -73,6 +74,11 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     logits = engine.encode(input_ids=input_ids)[:,-1]
     next_tokens = sampling_argmax_batch(logits=logits)
     output = torch.cat((output, next_tokens),dim=-1)
+
+    if args.printoutput:
+        spec_stream(input_ids[0, -50:], tokenizer, 'yellow')
+        spec_stream(next_tokens[0], tokenizer, 'cyan')
+            
     torch.cuda.synchronize()
     t1 = time.perf_counter()
     while output.size(1)<args.prefix_len + args.gen_len and terminate == False:
@@ -81,17 +87,22 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
         next_tokens = sampling_argmax_batch(logits=logits)
         output = torch.cat((output, next_tokens),dim=-1)
         model_steps += 1
+        
+        if args.printoutput:
+            spec_stream(next_tokens[0], tokenizer, 'cyan')
+        
         if (next_tokens[:,-1] == eot_1)._is_any_true() or (next_tokens[:,-1] == eot_2)._is_any_true(): terminate = True
     torch.cuda.synchronize()
     t2=time.perf_counter()
 
     if args.printoutput:
+        print("\n" * 2)
         for i in range(BATCH_SIZE):
             print(tokenizer.decode(output[i, args.prefix_len:]))
 
     total_time += t2-t1
     print(f"Tokens per second: {model_steps/total_time}")
-    if step < 3:
+    if step < 2:
         total_time = 0.0
         model_steps = 0
     if use_tp:

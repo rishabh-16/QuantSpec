@@ -1,4 +1,4 @@
-HOME_DIR=/home/rishabhtiwari/cache/
+HOME_DIR=/rscratch/xihc/cache
 HF_TOKEN=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
 
 python download.py \

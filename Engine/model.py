@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional
-
+import os
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -150,8 +150,35 @@ class TransformerBlock(nn.Module):
         self.attention_norm = RMSNorm(config.dim, config.norm_eps)
 
     def forward(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor) -> Tensor:
-        h = x + self.attention(self.attention_norm(x), freqs_cis, cache_seqlens)
-        out = h + self.feed_forward(self.ffn_norm(h))
+        events_with_desc = []
+        def record_event(event_list, description):
+            event = torch.cuda.Event(enable_timing=True)
+            event.record()
+            event_list.append((event, description))
+        time_bench = int(os.getenv("TIME_BENCH", "0")) >= 1
+        
+        if time_bench:
+            record_event(events_with_desc, "Start")
+        h = self.attention_norm(x)
+        if time_bench:
+            record_event(events_with_desc, "LayerNorm")
+        h = x + self.attention(h, freqs_cis, cache_seqlens)
+        if time_bench:
+            record_event(events_with_desc, "Attention")
+        hh = self.ffn_norm(h)
+        if time_bench:
+            record_event(events_with_desc, "LayerNorm")
+        out = h + self.feed_forward(hh)
+        if time_bench:
+            record_event(events_with_desc, "MLP")
+                
+        if time_bench:
+            torch.cuda.synchronize()
+            for i in range(len(events_with_desc) - 1):
+                start_event, start_desc = events_with_desc[i]
+                end_event, end_desc = events_with_desc[i + 1]
+                elapsed_time = start_event.elapsed_time(end_event)
+                print(f"From '{start_desc}' to '{end_desc}' took {elapsed_time:.3f} ms.")
         return out
 
     def prefill(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor) -> Tensor:
@@ -191,6 +218,15 @@ class Attention(nn.Module):
             state_dict[prefix + "wqkv.weight"] = torch.cat([wq, wk, wv])
 
     def forward(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor) -> Tensor:
+        events_with_desc = []
+        def record_event(event_list, description):
+            event = torch.cuda.Event(enable_timing=True)
+            event.record()
+            event_list.append((event, description))
+        time_bench = int(os.getenv("TIME_BENCH", "0")) >= 2
+        
+        if time_bench:
+            record_event(events_with_desc, "    Start")
         bsz, seqlen, _ = x.shape
 
         kv_size = self.n_local_heads * self.head_dim
@@ -199,22 +235,42 @@ class Attention(nn.Module):
         q = q.view(bsz, seqlen, self.n_head, self.head_dim)
         k = k.view(bsz, seqlen, self.n_local_heads, self.head_dim)
         v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim)
+        
+        if time_bench:
+            record_event(events_with_desc, "    QKV Linear")
 
         q = apply_rotary_emb(q, freqs_cis)
         k = apply_rotary_emb(k, freqs_cis)
+        
+        if time_bench:
+            record_event(events_with_desc, "    RoPE")
 
         if self.kv_cache is not None:
             k_cache, v_cache = self.kv_cache.k_cache, self.kv_cache.v_cache
 
         # for decoding and verification, use gqa_custom
         y = self._attn(q, k_cache, v_cache, k, v, cache_seqlens)
-        # y = torch.ops.mylib.custom_func(q, k_cache, v_cache, k, v, cache_seqlens)
+        y = torch.ops.mylib.custom_func(q, k_cache, v_cache, k, v, cache_seqlens)
 
         y = y.contiguous().view(bsz, seqlen, self.dim)
+        
+        if time_bench:
+            record_event(events_with_desc, "    SDPA Attention")
 
         y = self.wo(y)
         if self.process_group != None:
             dist.all_reduce(y)
+        
+        if time_bench:
+            record_event(events_with_desc, "    Out and End")        
+                
+        if time_bench:
+            torch.cuda.synchronize()
+            for i in range(len(events_with_desc) - 1):
+                start_event, start_desc = events_with_desc[i]
+                end_event, end_desc = events_with_desc[i + 1]
+                elapsed_time = start_event.elapsed_time(end_event)
+                print(f"From '{start_desc}' to '{end_desc}' took {elapsed_time:.3f} ms.")
         return y
 
     def prefill(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor) -> Tensor:

@@ -1,3 +1,4 @@
+import os
 import math
 import time
 import torch
@@ -56,6 +57,13 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
     # If quantization group size is 32 and batch size = 1, This should be set to 256
     assert precision == 4, f"Precision should be 4, not {precision}"
     
+    events_with_desc = []
+    def record_event(event_list, description):
+        event = torch.cuda.Event(enable_timing=True)
+        event.record()
+        event_list.append((event, description))
+    time_bench = int(os.getenv("TIME_BENCH", "0"))
+                
     BLOCK_SEQ = 128
     assert kbit == vbit, "We only support kbit == vbit in [2, 4]"
     batch_size = q.shape[0]
@@ -74,6 +82,11 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         [batch_size, q_head_num, max_seq_length // BLOCK_SEQ + 1], dtype=torch.float32, device=q.device
     )
 
+    time_bench = int(os.getenv("TIME_BENCH", "0")) >= 3
+            
+    if time_bench:
+        record_event(events_with_desc, "        Start")
+            
     q_kernel = q.view(calcu_shape1)
     int8kv_upperlower_flash_decode_stage1(
         q_kernel,
@@ -96,7 +109,10 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         elem_per_int,
         precision
     )
-
+            
+    if time_bench:
+        record_event(events_with_desc, "        Stage 1")
+            
     if full_k is not None and full_v is not None:
         mask = torch.arange(max_residual_len, device=full_k.device).unsqueeze(0).unsqueeze(0).unsqueeze(3) < residual_len
         full_k.mul_(mask)
@@ -115,7 +131,20 @@ def token_decode_attention_int8kv_upperlower_flash_decoding(
         full_attn_weights = full_attn_weights / sum_exp.unsqueeze(3)
     else:
         full_attn_weights, logExpSum = None, None
-
+            
+    if time_bench:
+        record_event(events_with_desc, "        Residual")
+    
     int8kv_upperlower_flash_decode_stage2(mid_o, mid_o_logexpsum, o_tensor.view(calcu_shape1), full_attn_weights, logExpSum, qcache_len, BLOCK_SEQ)
-
+            
+    if time_bench:
+        record_event(events_with_desc, "        Stage 2")
+                          
+    if time_bench:
+        torch.cuda.synchronize()
+        for i in range(len(events_with_desc) - 1):
+            start_event, start_desc = events_with_desc[i]
+            end_event, end_desc = events_with_desc[i + 1]
+            elapsed_time = start_event.elapsed_time(end_event)
+            print(f"From '{start_desc}' to '{end_desc}' took {elapsed_time:.3f} ms.")  
     return o_tensor

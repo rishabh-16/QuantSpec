@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional
-
+import os
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -274,7 +274,7 @@ class Transformer(nn.Module):
         return logits
 
     @classmethod
-    def from_name(cls, name: str, quantize: bool = False):
+    def from_name(cls, name: str, quantize: bool = False):        
         return cls(ModelArgs.from_name(name, quantize))
 
 
@@ -297,8 +297,38 @@ class TransformerBlock(nn.Module):
         return out
     
     def draft_forward(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
-        h = x + self.attention.draft_forward(self.attention_norm(x), freqs_cis, cache_seqlens, qcache_seqlens)
-        out = h + self.feed_forward.draft_forward(self.ffn_norm(h))
+        events_with_desc = []
+        def record_event(event_list, description):
+            event = torch.cuda.Event(enable_timing=True)
+            event.record()
+            event_list.append((event, description))
+        time_bench = int(os.getenv("TIME_BENCH", "0")) >= 1
+        
+        # h = x + self.attention.draft_forward(self.attention_norm(x), freqs_cis, cache_seqlens, qcache_seqlens)
+        # out = h + self.feed_forward.draft_forward(self.ffn_norm(h))
+        
+        if time_bench:
+            record_event(events_with_desc, "Start")
+        h = self.attention_norm(x)
+        if time_bench:
+            record_event(events_with_desc, "LayerNorm")
+        h = x + self.attention.draft_forward(h, freqs_cis, cache_seqlens, qcache_seqlens)
+        if time_bench:
+            record_event(events_with_desc, "Attention")
+        hh = self.ffn_norm(h)
+        if time_bench:
+            record_event(events_with_desc, "LayerNorm")
+        out = h + self.feed_forward.draft_forward(hh)
+        if time_bench:
+            record_event(events_with_desc, "MLP")
+                
+        if time_bench:
+            torch.cuda.synchronize()
+            for i in range(len(events_with_desc) - 1):
+                start_event, start_desc = events_with_desc[i]
+                end_event, end_desc = events_with_desc[i + 1]
+                elapsed_time = start_event.elapsed_time(end_event)
+                print(f"From '{start_desc}' to '{end_desc}' took {elapsed_time:.3f} ms.")
         return out
 
 
@@ -421,15 +451,27 @@ class Attention(nn.Module):
     
     def draft_forward(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
         bsz, seqlen, _ = x.shape
-
+        events_with_desc = []
+        def record_event(event_list, description):
+            event = torch.cuda.Event(enable_timing=True)
+            event.record()
+            event_list.append((event, description))
+        time_bench = int(os.getenv("TIME_BENCH", "0")) >= 2
+                
+        if time_bench:
+            record_event(events_with_desc, "    Start")
         kv_size = self.n_local_heads * self.head_dim
         q, k, v = self.wqkv(x).split([self.dim, kv_size, kv_size], dim=-1)
-
+        
+        if time_bench:
+            record_event(events_with_desc, "    QKV Linear")
         # TODO: check transpose
         q = apply_rotary_emb(q.view(bsz, seqlen, self.n_head, self.head_dim), freqs_cis).transpose(1,2)
         k = apply_rotary_emb(k.view(bsz, seqlen, self.n_local_heads, self.head_dim), freqs_cis).transpose(1,2)
         v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim).transpose(1,2)
-        
+                
+        if time_bench:
+            record_event(events_with_desc, "    RoPE")
         # if self.kv_cache is not None:
         #     k, v = self.kv_cache.update(cache_seqlens, k, v)
 
@@ -439,6 +481,9 @@ class Attention(nn.Module):
         repeat_factor = self.n_head // self.n_local_heads
 
         # y = torch.ops.mylib.custom_func_2(q, k, v)
+                
+        if time_bench:
+            record_event(events_with_desc, "    Update KV Cache")
 
         y = torch.ops.mylib.flash_decoding(
             q=q,
@@ -463,11 +508,24 @@ class Attention(nn.Module):
         )
         
         y = y.transpose(1, 2).reshape(bsz, seqlen, self.dim).contiguous()
-
+        
+        if time_bench:
+            record_event(events_with_desc, "    Quant Attention")
+            
         y = self.wo(y)
         if self.process_group != None:
             dist.all_reduce(y)
-
+        
+        if time_bench:
+            record_event(events_with_desc, "    Out and End")        
+                
+        if time_bench:
+            torch.cuda.synchronize()
+            for i in range(len(events_with_desc) - 1):
+                start_event, start_desc = events_with_desc[i]
+                end_event, end_desc = events_with_desc[i + 1]
+                elapsed_time = start_event.elapsed_time(end_event)
+                print(f"From '{start_desc}' to '{end_desc}' took {elapsed_time:.3f} ms.")
         return y
 
 class FeedForward(nn.Module):
@@ -477,7 +535,6 @@ class FeedForward(nn.Module):
         self.w3 = nn.Linear(config.dim, config.intermediate_size, bias=False)
         self.w2 = nn.Linear(config.intermediate_size, config.dim, bias=False)
         self.quantize = config.quantize
-        
 
         if config.quantize:
             self.w1_quantized = marlin.Layer(config.dim, config.intermediate_size, groupsize=128)

@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import random
+from termcolor import colored
 from torch.nn.functional import softmax
 from flash_attn import flash_attn_with_kvcache
 from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
@@ -490,6 +491,8 @@ def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=
         marlin_dict = torch.load(marlin_checkpoint, mmap=True, weights_only=True)
         checkpoint = add_marlin_dict(checkpoint, marlin_dict)
 
+    # import IPython
+    # IPython.embed()
     model.load_state_dict(checkpoint, assign=True)
     # if quantize:
     #     marlin_dict = torch.load(marlin_checkpoint)
@@ -502,3 +505,15 @@ def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=
 
     model = model.to(device=device, dtype=precision)
     return model.eval()
+
+def spec_stream(pred_token_idx, tokenizer, color='blue'):
+    decoded_token = tokenizer.decode(
+            pred_token_idx,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=True,
+            # spaces_between_special_tokens=False,
+        )
+
+    decoded_token = decoded_token.replace("<0x0A>", "\n")
+
+    print(colored(decoded_token, color), flush=True, end=" ")

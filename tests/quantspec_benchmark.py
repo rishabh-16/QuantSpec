@@ -12,6 +12,7 @@ from tqdm import tqdm
 import argparse
 import contextlib
 from QuantSpec_magidec.Engine.backend_quantspec import LMBackend
+from QuantSpec_magidec.Engine.utils import spec_stream
 
 parser = argparse.ArgumentParser(description='Process model configuration and partitions.')
 parser.add_argument('--model', type=Path, default=Path("checkpoints/meta-llama/Llama-2-7b-hf/model.pth"), help='model')
@@ -84,7 +85,7 @@ repeats = 20
 no_runs = int(BATCH_SIZE*repeats)
 dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len) #, end=no_runs)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
-num_eval_steps = min(10, len(dataloader))
+num_eval_steps = min(4, len(dataloader))
 
 total_time = 0.0
 num_gen_tokens = 0
@@ -116,6 +117,10 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     
     tokens_buffer[:,:1] = sampling_argmax_batch(logits=logits)
     
+    if args.printoutput:
+        spec_stream(input_ids[0, -50:], tokenizer, 'yellow')
+        spec_stream(tokens_buffer[0], tokenizer, 'cyan')
+            
     cachelens_update = None
 
     torch.cuda.synchronize()
@@ -156,7 +161,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
         target_tokens = target_sample(target_logits)
         target_steps+=1
 
-    # Verify loop
+        # Verify loop
         bonus_tokens = torch.full((BATCH_SIZE, 1), 0, device=DEVICE).long()
         accept_nums = torch.full((BATCH_SIZE, 1), 1, device=DEVICE).long()
         accept_flags = torch.full((BATCH_SIZE, 1), True, device=DEVICE)
@@ -188,7 +193,10 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
         positions_buffer = torch.arange(args.gamma+1, device=DEVICE).view(1, -1).repeat(BATCH_SIZE, 1)
         mask_buffer = positions_buffer<accept_nums.view(-1,1)
         output[mask] = tokens_buffer[mask_buffer]
-
+        
+        if args.printoutput:
+            spec_stream(tokens_buffer[mask_buffer][1:], tokenizer, 'green')
+            
         # Set the cache length to the accepted length
         engine.cachelens += accept_nums.flatten()
         # max_limit = torch.full_like(accept_nums, args.gamma, device = DEVICE)
@@ -196,14 +204,20 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
         # engine.draft_cachelens = engine.draft_cachelens - args.gamma
         # # engine.draft_cachelens += accept_nums.flatten()
         # engine.draft_cachelens += limited_accept_nums.flatten()
-        
+
         # Get the bonus tokens
         indices = accept_nums - 1
         bonus_tokens = target_tokens.gather(1, indices)
         if (bonus_tokens == 2).any() or (bonus_tokens == 0).any():
             terminal = True
         num_nodes += accept_nums.flatten()
-
+        
+        if args.printoutput:
+            if indices == args.gamma:
+                spec_stream(bonus_tokens[0], tokenizer, 'cyan')
+            else:
+                spec_stream(bonus_tokens[0], tokenizer, 'red')
+            
         # Check Number of Nodes + Bonus Token <= max_target_token
         if num_nodes.max() + 1 >= args.prefix_len + args.gen_len:
             terminal = True
@@ -227,17 +241,20 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 
     torch.cuda.synchronize()
     end=time.perf_counter()
-    total_time += end-start
-    num_gen_tokens += (num_nodes.sum() - (input_ids.shape[1]+1)*BATCH_SIZE)
+    step_time = end-start
+    total_time += step_time
+    step_gen_tokens = (num_nodes.sum() - (input_ids.shape[1]+1)*BATCH_SIZE)
+    num_gen_tokens += step_gen_tokens
     if args.printoutput:
+        print("\n" * 2)
         for i in range(BATCH_SIZE):
             print(tokenizer.decode(output[i, args.prefix_len:num_nodes[i]]))
     if benchmark:
         print("acceptance rate: {:.2%}, total time :{:.5f}s, time per iter :{:.5f}s, decoding step: {}, large model step: {}".format(accepted_tokens_count / total_tokens_count, total_time, total_time / target_steps, num_gen_tokens, target_steps))
     acceptance_rates.append(accepted_tokens_count / total_tokens_count)
     if benchmark:
-        print("target time :{:.5f}s, draft time :{:.5f}s, verify loop : {}, avg generate len per sentence: {}".format(target_time/target_steps, draft_time / target_steps, verify_loop/target_steps, num_gen_tokens/target_steps/BATCH_SIZE))
-    if step < 3:   # TODO: revert to 10?
+        print("target time :{:.5f}s, draft time :{:.5f}s, verify loop : {}, avg generate len per sentence: {}, Tokens per second: {}".format(target_time/target_steps, draft_time / target_steps, verify_loop/target_steps, num_gen_tokens/target_steps/BATCH_SIZE, step_gen_tokens / step_time))
+    if step < 2:   # TODO: revert to 10?
         total_time = 0.0
         num_gen_tokens = 0
         target_steps = 0
