@@ -19,9 +19,10 @@ PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun 
     --prefix_len 32000 \
     --gen_len 100 \
     --printout \
-    --benchmark \
-    --compile
+    --benchmark
 
-#    --compile \
+
+    # --compile \
+    # --wq
 # TORCH_LOGS=+dynamo TORCHDYNAMO_VERBOSE=1 
 

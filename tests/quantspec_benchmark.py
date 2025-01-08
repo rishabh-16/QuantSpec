@@ -85,7 +85,7 @@ repeats = 20
 no_runs = int(BATCH_SIZE*repeats)
 dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len) #, end=no_runs)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
-num_eval_steps = min(4, len(dataloader))
+num_eval_steps = min(10, len(dataloader))
 
 total_time = 0.0
 num_gen_tokens = 0
