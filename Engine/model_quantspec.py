@@ -9,6 +9,7 @@ import torch.distributed as dist
 import math 
 from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
 import marlin
+from QuantSpec_magidec.Engine.model import transformer_configs
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
         return n
@@ -44,38 +45,23 @@ class ModelArgs:
 
     @classmethod
     def from_name(cls, name: str, quantize: bool = False):
-        if name in transformer_configs:
-            if quantize:
-                config = transformer_configs[name]
-                config['quantize'] = True
-                return cls(**config)
-            else:
-                return cls(**transformer_configs[name])
-        # fuzzy search
-        config = [config for config in transformer_configs if config.lower() in str(name).lower()]
-        # We may have two or more configs matched (e.g. "7B" and "Mistral-7B"). Find the best config match,
-        # take longer name (as it have more symbols matched)
-        if len(config) > 1:
-            config.sort(key=len, reverse=True)
-            assert len(config[0]) != len(config[1]), name # make sure only one 'best' match
-        return cls(**transformer_configs[config[0]])
+        if name.lower() in transformer_configs:
+            config = transformer_configs[name.lower()].copy()
+        else:
+            print("model name not found, using fuzzy search")
+            # fuzzy search
+            config_names = [config for config in transformer_configs if config.lower() in str(name).lower()]
+            # We may have two or more configs matched (e.g. "7B" and "Mistral-7B"). Find the best config match,
+            # take longer name (as it have more symbols matched)
+            if len(config_names) > 1:
+                config_names.sort(key=len, reverse=True)
+                assert len(config_names[0]) != len(config_names[1]), name # make sure only one 'best' match
+                config = transformer_configs[config_names[0]].copy()
+        if quantize:
+            config['quantize'] = True
+        return cls(**config)
     
 
-
-
-transformer_configs = {
-    "llama-2-7b": dict(block_size=4096, n_layer=32, n_head=32, dim=4096),
-    "Llama-2-7b-hf": dict(block_size=4096, n_layer=32, n_head=32, dim=4096),
-    'llama-2-7b-32k': dict(block_size=32768, n_layer=32, dim= 4096, vocab_size=32000, scaling_factor=8),
-    "llama-2-13b": dict(block_size=4096, n_layer=40, n_head=40, dim=5120),
-    "llama-2-70b": dict(block_size=4096, n_layer=80, n_head=64, dim=8192, n_local_heads=8, intermediate_size=28672),
-    "llama-3-8b": dict(block_size=8192, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000),
-    "llama-3-70b": dict(block_size=8192, n_layer=80, n_head=64, n_local_heads=8, dim=8192, intermediate_size=28672, vocab_size=128256, rope_base=500000),
-    "68m": dict(block_size=2048, n_layer=2, n_head=12, n_local_heads=12, dim=768, intermediate_size=3072, vocab_size=32000),
-    "tinyllama": dict(block_size =2048, n_layer=22, n_head=32, n_local_heads=4, dim=2048, intermediate_size=5632, vocab_size=32000),
-    "llama-3.1-8b": dict(block_size=131072, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000.0, scaling_factor=8, high_freq_factor=4, low_freq_factor=1, original_max_position_embeddings=8192),
-    "Meta-Llama-3.1-8B": dict(block_size=131072, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000.0, scaling_factor=8, high_freq_factor=4, low_freq_factor=1, original_max_position_embeddings=8192),
-}
 
 class KVCache(nn.Module):
     def __init__(self, max_batch_size, max_seq_length, n_heads, head_dim, dtype=torch.bfloat16, **cache_kwargs):
@@ -213,32 +199,6 @@ class Transformer(nn.Module):
             self.freqs_cis = precompute_freqs_cis(self.config.block_size, self.config.dim // self.config.n_head, self.config.rope_base,dtype,
                                                   # new params
                                                   self.config.scaling_factor)
-
-    def load_marlin_dict(self, marlin_dict):
-        for key in marlin_dict.keys():
-            if 'mlp' in key:
-                # Get the corresponding engine model key by replacing mlp with feed_forward
-                engine_key = key.replace('mlp', 'feed_forward')
-                
-                # Map the gate_proj, up_proj, down_proj to w1, w2, w3 respectively
-                if 'gate_proj' in key:
-                    engine_key = engine_key.replace('gate_proj', 'w1_quantized')
-                elif 'up_proj' in key:
-                    engine_key = engine_key.replace('up_proj', 'w3_quantized') 
-                elif 'down_proj' in key:
-                    engine_key = engine_key.replace('down_proj', 'w2_quantized')
-                    
-                # Get the layer components from the key
-                parts = engine_key.split('.')
-                layer_idx = int(parts[2])
-                
-                # Get the corresponding module
-                layer = self.layers[layer_idx].feed_forward
-                module = getattr(layer, parts[-2])
-                
-                # Load the weights
-                param_name = parts[-1] # B or s
-                setattr(module, param_name, marlin_dict[key])
 
     def forward(self, idx: Tensor, input_pos: Optional[Tensor], cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
         assert self.freqs_cis is not None, "Caches must be initialized first"

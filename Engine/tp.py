@@ -124,11 +124,11 @@ def _apply_tp_linear_mlp(linear: nn.Linear, style: str, weight_splits: List[int]
     # Linear's weight matrix is transposed, and is of shape
     # (linear.out_features, linear.in_features)
     dim_lookup = {
-        "colwise": (0, "out_features"),
-        "rowwise": (1, "in_features")
+        "colwise": (0, 1, 0, "out_features", "n"),
+        "rowwise": (1, 0, None, "in_features", "k"),
     }
     assert style in dim_lookup
-    shard_dim, size_attr = dim_lookup[style]
+    shard_dim, q_shard_dim, workspace_shard_dim, size_attr, q_size_attr = dim_lookup[style]
 
     # ensure we can shard evenly
     # assert getattr(linear, size_attr) % world_size == 0
@@ -137,13 +137,24 @@ def _apply_tp_linear_mlp(linear: nn.Linear, style: str, weight_splits: List[int]
         return torch.chunk(x, world_size, dim=dim)[rank]
 
     # shard
-    sharded_weight = shard(linear.weight, shard_dim)
+    if hasattr(linear, "weight"):
+        sharded_weight = shard(linear.weight, shard_dim)
+        linear.weight = nn.Parameter(sharded_weight, requires_grad=False)
+        setattr(linear, size_attr, linear.weight.shape[shard_dim])
+    if hasattr(linear, "B"):
+        sharded_B = shard(linear.B, q_shard_dim)
+        linear.B = nn.Parameter(sharded_B, requires_grad=False)
+        setattr(linear, q_size_attr, linear.B.shape[q_shard_dim])
+    if hasattr(linear, "s"):
+        sharded_s = shard(linear.s, q_shard_dim)
+        linear.s = nn.Parameter(sharded_s, requires_grad=False)
+    if hasattr(linear, "workspace") and style == "colwise":
+        sharded_workspace = shard(linear.workspace, workspace_shard_dim)
+        linear.workspace = nn.Parameter(sharded_workspace, requires_grad=False)
     if hasattr(linear, "scales") and style == "colwise":
         linear.scales = shard(linear.scales, 0)
 
     # local_break()
-    linear.weight = nn.Parameter(sharded_weight, requires_grad=False)
-    setattr(linear, size_attr, linear.weight.shape[shard_dim])
 
     # shape info should still be synced
     # assert linear.weight.shape == (linear.out_features, linear.in_features)

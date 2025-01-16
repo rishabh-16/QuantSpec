@@ -12,6 +12,12 @@ from tqdm import tqdm
 import argparse
 import contextlib
 from QuantSpec_magidec.Engine.backend_quantspec import LMBackend
+# import torch._dynamo
+# torch._dynamo.config.suppress_errors = True
+import marlin
+# torch.compiler.allow_in_graph(marlin.marlin_cuda.mul)
+# torch._dynamo.symbolic(marlin.marlin_cuda.mul)
+
 
 parser = argparse.ArgumentParser(description='Process model configuration and partitions.')
 parser.add_argument('--model', type=Path, default=Path("checkpoints/meta-llama/Llama-2-7b-hf/model.pth"), help='model')
@@ -237,6 +243,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     acceptance_rates.append(accepted_tokens_count / total_tokens_count)
     if benchmark:
         print("target time :{:.5f}s, draft time :{:.5f}s, verify loop : {}, avg generate len per sentence: {}".format(target_time/target_steps, draft_time / target_steps, verify_loop/target_steps, num_gen_tokens/target_steps/BATCH_SIZE))
+        print(f"Tokens per second :{BATCH_SIZE*(num_gen_tokens/total_time)}")
     if step < 3:   # TODO: revert to 10?
         total_time = 0.0
         num_gen_tokens = 0
@@ -252,6 +259,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if len(acceptance_rates) > 0 else 0
 print(f"Acceptance Rate: {acceptance_rate:.2%}")
 print(f"method latency: {total_time/num_gen_tokens}")
+print(f"Tokens per second :{BATCH_SIZE*(num_gen_tokens/total_time)}")
 
 if hasattr(prof, "export_chrome_trace"):
     prof.export_chrome_trace(f"prof_selfspec.json")

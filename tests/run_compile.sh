@@ -10,15 +10,17 @@ PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun 
     --standalone \
     --nproc_per_node=$(echo $1 | tr ',' ' ' | wc -w) \
     tests/quantspec_benchmark.py \
-    --model /home/rishabhtiwari/cache/checkpoints/togethercomputer/LLaMA-2-7B-32K/model.pth \
+    --model /rscratch/rishabhtiwari/cache/togethercomputer/LLaMA-2-7B-32K/model.pth \
     --model_name togethercomputer/LLaMA-2-7B-32K \
-    --marlin_path /home/rishabhtiwari/cache/marlin/llama3_8b_checkpoint.pt.marlin.g128 \
+    --marlin_path /rscratch/rishabhtiwari/marlin_updated/marlin/gptq/llama2_7b_32k_checkpoint.pt.marlin.g128 \
     --rank_group $(seq -s ' ' 0 $(($(echo $1 | tr ',' ' ' | wc -w) - 1))) \
     --gamma 6 \
     --B 1 \
-    --prefix_len 16000 \
+    --wq \
+    --prefix_len 31899 \
     --gen_len 64 \
     --printout \
+    --compile \
     --benchmark
 
 #    --compile \

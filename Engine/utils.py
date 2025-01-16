@@ -491,9 +491,7 @@ def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=
         checkpoint = add_marlin_dict(checkpoint, marlin_dict)
 
     model.load_state_dict(checkpoint, assign=True)
-    # if quantize:
-    #     marlin_dict = torch.load(marlin_checkpoint)
-    #     model.load_marlin_dict(marlin_dict)
+
 
     if use_tp:
         from QuantSpec_magidec.Engine.tp import apply_tp
