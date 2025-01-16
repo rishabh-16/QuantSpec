@@ -7,7 +7,26 @@ from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verif
 
 from QuantSpec_magidec.kernels.flashdecoding.int8_upperlower.int8kv_upperlower_flash_decoding import token_decode_attention_int8kv_upperlower_flash_decoding
 
+from marlin import marlin_cuda
 
+torch.library.define(
+    "mylib::marlin_mul",
+    "(Tensor(a!) A, \
+    Tensor(b!) B, \
+    Tensor(c!) C, \
+    Tensor(d!) s, \
+    Tensor(e!) workspace \
+    ) -> Tensor",
+)
+
+@torch.library.impl("mylib::marlin_mul", "cuda")
+def marlin_mul(A, B, C, s, workspace):
+    marlin_cuda.mul(A, B, C, s, workspace, -1, -1, -1, 16)
+
+
+@torch.library.impl_abstract("mylib::marlin_mul")
+def marlin_mul_abstract(A, B, C, s, workspace):
+    return torch.empty(C.shape, dtype=C.dtype, device=C.device)
 
 torch.library.define(
     "mylib::flash_verification",

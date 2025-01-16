@@ -10,10 +10,20 @@ import math
 from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
 import marlin
 from QuantSpec_magidec.Engine.model import transformer_configs
+
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
         return n
     return n + k - (n % k)
+
+class marlin_Layer(marlin.Layer):
+    def __init__(self, infeatures, outfeatures, groupsize=-1):
+        super().__init__(infeatures, outfeatures, groupsize)
+
+    def forward(self, A):
+        C = torch.empty(A.shape[:-1] + (self.s.shape[1],), dtype=A.dtype, device=A.device)
+        torch.ops.mylib.marlin_mul(A.view((-1, A.shape[-1])), self.B, C.view((-1, C.shape[-1])), self.s, self.workspace)
+        return C
 
 @dataclass
 class ModelArgs:
@@ -440,9 +450,9 @@ class FeedForward(nn.Module):
         
 
         if config.quantize:
-            self.w1_quantized = marlin.Layer(config.dim, config.intermediate_size, groupsize=128)
-            self.w3_quantized = marlin.Layer(config.dim, config.intermediate_size, groupsize=128)
-            self.w2_quantized = marlin.Layer(config.intermediate_size, config.dim, groupsize=128)
+            self.w1_quantized = marlin_Layer(config.dim, config.intermediate_size, groupsize=128)
+            self.w3_quantized = marlin_Layer(config.dim, config.intermediate_size, groupsize=128)
+            self.w2_quantized = marlin_Layer(config.intermediate_size, config.dim, groupsize=128)
         self.process_group = None
 
     def forward(self, x: Tensor) -> Tensor:

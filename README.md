@@ -12,5 +12,6 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 conda install -c conda-forge gxx=13.2.0
 pip install -r requirements.txt
 pip install flash-attn --no-build-isolation
+pip install -e marlin/
 ```
 
