@@ -1,5 +1,5 @@
-HOME_DIR=/home/rishabhtiwari/cache/
-HF_TOKEN=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
+HOME_DIR=$HF_HOME
+HF_TOKEN=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
 
 python download.py \
     --repo_id $1 \
