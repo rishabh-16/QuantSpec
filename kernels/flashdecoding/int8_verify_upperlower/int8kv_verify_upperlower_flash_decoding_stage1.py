@@ -140,7 +140,7 @@ def _fwd_kernel_int8kv_verify_upperlower_flash_decode_stage1(
         acc_token7 = tl.zeros([BLOCK_DMODEL], dtype=tl.float32)
     
     # tl.device_print("block_n", block_n_size)
-    for start_n in range(0, block_n_size, 1): # Along the sequence length axis
+    for start_n in tl.range(block_n_size): # Along the sequence length axis
         offs_n_quant_k_new = start_n * BLOCK_N + offs_n_quant_k
         offs_n_scale_k_new = (start_n * BLOCK_N) // group_size + offs_n_scale_k
 

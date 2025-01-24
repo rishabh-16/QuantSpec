@@ -14,6 +14,7 @@ PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun 
     --model_name togethercomputer/LLaMA-2-7B-32K \
     --rank_group $(seq -s ' ' 0 $(($(echo $1 | tr ',' ' ' | wc -w) - 1))) \
     --B 1 \
-    --prefix_len 32000 \
+    --prefix_len 16384 \
     --gen_len 100 \
-    --printout
+    --printoutput \
+    --compile

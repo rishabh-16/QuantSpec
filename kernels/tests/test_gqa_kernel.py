@@ -3,12 +3,8 @@ import torch
 import unittest
 import numpy as np
 
+from flashdecoding.fp16.flash_decoding import token_decode_attention_flash_decoding
 from flashdecoding.fp16_gqa.gqa_flash_decoding import token_decode_gqa_attention_flash_decoding
-
-from quantize.quant_pack_int4toint32 import triton_int4toint32_quantize_and_pack_along_last_dim, triton_int4toint32_quantize_and_pack_along_penultimate_dim
-from quantize.quant_pack_int4toint8 import triton_int4toint8_quantize_along_penultimate_dim_and_pack_along_last_dim
-from quantize.quant_pack_int8toint8 import triton_int8toint8_quantize_along_penultimate_dim_and_pack_along_last_dim
-from quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
 
 from tests.test_utils import quantize_tensor_last_dim, quantize_tensor_penultimate_dim
 
@@ -27,6 +23,8 @@ def _init_simulate_kvcache(group_size, bit, B, nh, kv_nh, T, D):
         query_states = torch.rand((B, nh, 1, D), device=device, dtype=dtype)
         key_states = torch.rand((B, kv_nh, T, D), device=device, dtype=dtype)
         value_states = torch.rand((B, kv_nh, T, D), device=device, dtype=dtype)
+        key_states_all = torch.rand((B, nh, T, D), device=device, dtype=dtype)
+        value_states_all = torch.rand((B, nh, T, D), device=device, dtype=dtype)
 
     if init_method == "saved":
         query_states, key_states, value_states, dropout, softmax_scale, causal = \
@@ -38,7 +36,7 @@ def _init_simulate_kvcache(group_size, bit, B, nh, kv_nh, T, D):
         # Transpose and permute to align the input of flashattention with our implementation
         query_states, key_states, value_states = query_states.transpose(1, 2).contiguous(), key_states.transpose(1, 2).contiguous(), value_states.transpose(1, 2).contiguous()
 
-    return query_states, key_states, value_states
+    return query_states, key_states, value_states, key_states_all, value_states_all
 
 """
 Simulated MHA
@@ -68,10 +66,13 @@ def _test_simulation_verify_query_mha(longer_query_states, key_states, value_sta
 
     return output_no_quantize
 
+def _test_fp16_flash_decoding(query_states, key_states, value_states, cache_len):
+    output = token_decode_attention_flash_decoding(query_states, key_states, value_states, qcache_len=cache_len)
+    return output
+
 def _test_fp16_gqa_flash_decoding(query_states, key_states, value_states, cache_len):
     output = token_decode_gqa_attention_flash_decoding(query_states, key_states, value_states, qcache_len=cache_len)
     return output
-
 
 def measure_cuda_timing(test_func, num_runs=20, *args, **kwargs):
     """
@@ -101,11 +102,20 @@ def measure_cuda_timing(test_func, num_runs=20, *args, **kwargs):
 
 
 class TestMHA(unittest.TestCase):
-    def test_mha(self):
-        query_states, key_states, value_states = _init_simulate_kvcache(group_size, bit, batch_size, num_heads, kv_heads, sequence_length, head_dim)
+    def test_gqa(self):
+        query_states, key_states, value_states, key_states_all, value_states_all = _init_simulate_kvcache(group_size, bit, batch_size, num_heads, kv_heads, sequence_length, head_dim)
         simulated_output = _test_simulation_mha(query_states, key_states, value_states, \
                                                 batch_size, num_heads, sequence_length, head_dim)
         
+        _value_states_all = value_states_all.transpose(2, 3).contiguous()
+        fp16_output = _test_fp16_flash_decoding(query_states, key_states_all, _value_states_all, cache_len=cache_len)
+        median_time = measure_cuda_timing(
+            _test_fp16_flash_decoding,
+            20, 
+            query_states, key_states_all, _value_states_all, cache_len=cache_len
+        )
+        print(f"Median execution time of Flash Decoding FP16 MQA: {median_time} ms")
+
         _value_states = value_states.transpose(2, 3).contiguous()
         fp16_output = _test_fp16_gqa_flash_decoding(query_states, key_states, _value_states, cache_len=cache_len)
         median_time = measure_cuda_timing(
@@ -113,7 +123,7 @@ class TestMHA(unittest.TestCase):
             20, 
             query_states, key_states, _value_states, cache_len=cache_len
         )
-        print(f"Median execution time of Flash Decoding FP16: {median_time} ms")
+        print(f"Median execution time of Flash Decoding FP16 GQA: {median_time} ms")
 
 if __name__ == "__main__":
     torch.manual_seed(0)

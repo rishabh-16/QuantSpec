@@ -85,7 +85,7 @@ repeats = 20
 no_runs = int(BATCH_SIZE*repeats)
 dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len) #, end=no_runs)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
-num_eval_steps = min(10, len(dataloader))
+num_eval_steps = min(20, len(dataloader))
 
 total_time = 0.0
 num_gen_tokens = 0
@@ -264,11 +264,16 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
             verify_loop = 0.0
     if use_tp:
         dist.barrier()
+    
+    if step == (num_eval_steps - 2):
+        print("We do not benchmark the last sample")
+        break
 
 # Calculate acceptance rate
 acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if len(acceptance_rates) > 0 else 0
 print(f"Acceptance Rate: {acceptance_rate:.2%}")
-print(f"method latency: {total_time/num_gen_tokens}")
+print(f"Method latency: {total_time / num_gen_tokens}")
+print(f"Method Tokens per second: {num_gen_tokens / total_time}")
 
 if hasattr(prof, "export_chrome_trace"):
     prof.export_chrome_trace(f"prof_selfspec.json")

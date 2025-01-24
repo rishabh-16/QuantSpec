@@ -19,8 +19,8 @@ from tests.test_utils import quantize_tensor_last_dim, quantize_tensor_penultima
 
 group_size = 128
 bit = 4
-batch_size, num_heads, sequence_length, head_dim = 1, 32, 128 * 1024, 128
-cache_len, residual_len = 128 * 1024, 272
+batch_size, num_heads, sequence_length, head_dim = 1, 32, 256 * 1024, 128
+cache_len, residual_len = 256 * 1024, 272
 
 num_runs = 20
 
@@ -173,7 +173,7 @@ def _init_int8_upperlower_quantize_kvcache(key_states, value_states, group_size,
 def _test_int8_upperlower_flash_decoding(query_states, \
                                          packquant_k_upper, packquant_k_lower, scale_k, min_k, \
                                          packquant_v_upper, packquant_v_lower, scale_v, min_v, \
-                                         group_size, bit, \
+                                         group_size, bit, precision=None, \
                                          full_k=None, full_v=None,
                                          cache_len=0, residual_len=0):
     
@@ -184,7 +184,7 @@ def _test_int8_upperlower_flash_decoding(query_states, \
                                                           packquant_k_upper, packquant_k_lower, scale_k, min_k, 
                                                           packquant_v_upper, packquant_v_lower, scale_v, min_v,
                                                           bit, bit, group_size, \
-                                                          full_k, full_v,
+                                                          full_k, full_v, precision=precision,
                                                           max_seq_length=cache_len, max_residual_len=residual_len,
                                                           qcache_len=cache_len, residual_len=residual_len)
     
@@ -307,13 +307,13 @@ class TestMHA(unittest.TestCase):
         int8_upperlower_output = _test_int8_upperlower_flash_decoding(query_states, \
                                                                       packquant_k_upper, packquant_k_lower, scale_k, min_k, \
                                                                       packquant_v_upper, packquant_v_lower, scale_v, min_v, \
-                                                                      group_size, bit, 
+                                                                      group_size, bit, precision=8,
                                                                       cache_len=cache_len, residual_len=residual_len)
         median_time = measure_cuda_timing(
             _test_int8_upperlower_flash_decoding,
             20, 
             query_states, packquant_k_upper, packquant_k_lower, scale_k, min_k, packquant_v_upper, packquant_v_lower, scale_v, min_v, 
-            group_size, bit, cache_len=cache_len, residual_len=residual_len
+            group_size, bit, precision=8, cache_len=cache_len, residual_len=residual_len
         )
         print(f"Median execution time of Flash Decoding INT8 UpperLower: {median_time} ms")
 
@@ -350,14 +350,14 @@ class TestMHA(unittest.TestCase):
         int8_upperlower_output = _test_int8_upperlower_flash_decoding(query_states, \
                                                                       packquant_k_upper, packquant_k_lower, scale_k, min_k, \
                                                                       packquant_v_upper, packquant_v_lower, scale_v, min_v, \
-                                                                      group_size, bit, \
-                                                                      full_key_states, full_value_states, 
+                                                                      group_size, bit, precision=8, \
+                                                                      full_k=full_key_states, full_v=full_value_states, 
                                                                       cache_len=cache_len, residual_len=residual_len)
         median_time = measure_cuda_timing(
             _test_int8_upperlower_flash_decoding,
             20, 
             query_states, packquant_k_upper, packquant_k_lower, scale_k, min_k, packquant_v_upper, packquant_v_lower, scale_v, min_v, \
-            group_size, bit, full_key_states, full_value_states, cache_len=cache_len, residual_len=residual_len
+            group_size, bit, precision=8, full_k=full_key_states, full_v=full_value_states, cache_len=cache_len, residual_len=residual_len
         )
         print(f"Median execution time of Flash Decoding INT8 UpperLower with Full part: {median_time} ms")
 
@@ -369,7 +369,7 @@ class TestMHA(unittest.TestCase):
 
 
         """ Query Sequence Length > 1 """
-        q_seq_len = 6
+        q_seq_len = 10
         verify_query_states = query_states.repeat(1, 1, q_seq_len, 1)
 
         packquant_k_upper, packquant_k_lower, scale_k, min_k, packquant_v_upper, packquant_v_lower, scale_v, min_v = _init_int8_verify_upperlower_quantize_kvcache(key_states, value_states, group_size, bit)
@@ -392,7 +392,7 @@ class TestMHA(unittest.TestCase):
 
         print(f"Median execution time of Flash Decoding INT8 UpperLower Without Full part, Query Sequence Length = {q_seq_len}: {median_time} ms")
 
-        q_seq_len = 6
+        q_seq_len = 1
         verify_query_states = query_states.repeat(1, 1, q_seq_len, 1)
 
         packquant_k_upper, packquant_k_lower, scale_k, min_k, packquant_v_upper, packquant_v_lower, scale_v, min_v = _init_int8_verify_upperlower_quantize_kvcache(key_states, value_states, group_size, bit)

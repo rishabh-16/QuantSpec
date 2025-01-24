@@ -61,7 +61,7 @@ print(f"eot_1: {eot_1}, eot_2: {eot_2}")
 
 dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
-num_eval_steps = min(4, len(dataloader))
+num_eval_steps = min(20, len(dataloader))
 
 total_time = 0.0
 model_steps = 0
@@ -107,5 +107,10 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
         model_steps = 0
     if use_tp:
         dist.barrier()
+    
+    if step == (num_eval_steps - 2):
+        print("We do not benchmark the last sample")
+        break
 
-print(f"method latency: {total_time/model_steps}")
+print(f"Method latency: {total_time / model_steps}")
+print(f"Method Tokens per second: {model_steps / total_time}")
