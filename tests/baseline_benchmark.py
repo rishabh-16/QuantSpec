@@ -62,11 +62,15 @@ dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len)
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
 num_eval_steps = min(10, len(dataloader))
 
+total_times = []
+
 total_time = 0.0
 model_steps = 0
 for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     if step >= num_eval_steps:
         break
+    total_time = 0.0
+    model_steps = 0
     input_ids = batch[0].to(DEVICE)
     terminate = False
     output = input_ids.clone()
@@ -89,12 +93,17 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
         for i in range(BATCH_SIZE):
             print(tokenizer.decode(output[i, args.prefix_len:]))
 
-    total_time += t2-t1
-    print(f"Tokens per second: {model_steps/total_time}")
-    if step < 3:
-        total_time = 0.0
-        model_steps = 0
+    total_time = t2-t1
+    # print(f"Tokens per second: {model_steps/total_time}")
+    # if step < 3:
+    #     total_time = 0.0
+    #     model_steps = 0
     if use_tp:
         dist.barrier()
+    
+    total_times.append(total_time)
+
+print(total_times)
+print(f"TOTAL TIME ACROSS ALL SAMPLES for CL = {args.prefix_len}: {sum(total_times[1:len(total_times)-1])/(len(total_times)-2)}")
 
 print(f"method latency: {total_time/model_steps}")

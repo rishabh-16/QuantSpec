@@ -105,11 +105,21 @@ prof = contextlib.nullcontext()
 # Initialize counters for accepted tokens and total tokens
 acceptance_rates = []
 
+total_times = []
+
+print(f"WQ: {args.wq}, KVQ: True")
 for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     accepted_tokens_count = 0
     total_tokens_count = 0
     if step >= num_eval_steps:
         break
+    total_time = 0.0
+    num_gen_tokens = 0
+    target_steps = 0
+    if benchmark:
+        draft_time = 0.0
+        target_time = 0.0
+        verify_loop = 0.0
     input_ids = batch[0].to(DEVICE)
     terminal = False
     tokens_buffer= torch.zeros((BATCH_SIZE, args.gamma+1), device=DEVICE).long()
@@ -244,22 +254,27 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     if benchmark:
         print("target time :{:.5f}s, draft time :{:.5f}s, verify loop : {}, avg generate len per sentence: {}".format(target_time/target_steps, draft_time / target_steps, verify_loop/target_steps, num_gen_tokens/target_steps/BATCH_SIZE))
         print(f"Tokens per second :{BATCH_SIZE*(num_gen_tokens/total_time)}")
-    if step < 3:   # TODO: revert to 10?
-        total_time = 0.0
-        num_gen_tokens = 0
-        target_steps = 0
-        if benchmark:
-            draft_time = 0.0
-            target_time = 0.0
-            verify_loop = 0.0
+    # if step < 10:   # TODO: revert to 10?
+    #     total_time = 0.0
+    #     num_gen_tokens = 0
+    #     target_steps = 0
+    #     if benchmark:
+    #         draft_time = 0.0
+    #         target_time = 0.0
+    #         verify_loop = 0.0
     if use_tp:
         dist.barrier()
+    
+    total_times.append(total_time)
+
+print(total_times)
+print(f"TOTAL TIME ACROSS ALL SAMPLES for CL = {args.prefix_len}: {sum(total_times[1:len(total_times)-1])/(len(total_times)-2)}")
 
 # Calculate acceptance rate
 acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if len(acceptance_rates) > 0 else 0
 print(f"Acceptance Rate: {acceptance_rate:.2%}")
-print(f"method latency: {total_time/num_gen_tokens}")
-print(f"Tokens per second :{BATCH_SIZE*(num_gen_tokens/total_time)}")
+# print(f"method latency: {total_time/num_gen_tokens}")
+# print(f"Tokens per second :{BATCH_SIZE*(num_gen_tokens/total_time)}")
 
 if hasattr(prof, "export_chrome_trace"):
     prof.export_chrome_trace(f"prof_selfspec.json")

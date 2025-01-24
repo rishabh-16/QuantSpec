@@ -11,13 +11,13 @@ CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun \
   --standalone \
   --nproc_per_node=1 \
   tests/baseline_benchmark.py \
-  --model $HF_HOME/checkpoints/meta-llama/Llama-2-7b-hf/model.pth \
-  --model_name meta-llama/Llama-2-7b-hf \
+  --model $HF_HOME/checkpoints/togethercomputer/LLaMA-2-7B-32K/model.pth \
+  --model_name togethercomputer/LLaMA-2-7B-32K \
   --rank_group 0 \
   --B 1 \
-  --prefix_len 1000 \
+  --prefix_len 1024 \
   --gen_len 100 \
-  --printoutput 
+  --printoutput
   
 # PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun \
 #     --standalone \

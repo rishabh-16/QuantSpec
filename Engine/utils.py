@@ -519,3 +519,29 @@ def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=
 
     model = model.to(device=device, dtype=precision)
     return model.eval()
+
+def load_model_weightspec(checkpoint_path, device, precision, use_tp, rank_group=None, group=None, quantize: bool = False, marlin_checkpoint: str = None):
+    import QuantSpec_magidec.Engine.model_weightspec as weightspec
+    with torch.device(device):
+        model = weightspec.Transformer.from_name(checkpoint_path.parent.name, quantize=quantize)
+    checkpoint = torch.load(str(checkpoint_path), mmap=True, weights_only=True)
+    if "model" in checkpoint and "stories" in str(checkpoint_path):
+        checkpoint = checkpoint["model"]
+    if quantize:
+        marlin_dict = torch.load(marlin_checkpoint, mmap=True, weights_only=True)
+        checkpoint = add_marlin_dict(checkpoint, marlin_dict)
+
+    # import IPython
+    # IPython.embed()
+    model.load_state_dict(checkpoint, assign=True)
+    # if quantize:
+    #     marlin_dict = torch.load(marlin_checkpoint)
+    #     model.load_marlin_dict(marlin_dict)
+
+    if use_tp:
+        from QuantSpec_magidec.Engine.tp import apply_tp
+        print("Applying tensor parallel to model ...")
+        apply_tp(model, rank_group, group=group)
+
+    model = model.to(device=device, dtype=precision)
+    return model.eval()
