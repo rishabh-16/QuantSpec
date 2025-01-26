@@ -41,7 +41,7 @@ def convert_pg19_dataset(tokenizer, seq_len = 4096, end = 20):
     d_files = os.listdir(datasetparent)
     dataset = load_dataset("json", data_files = [datasetparent + name for name in d_files], split = "train")
     tokenized_prompts = []
-    for i in tqdm(range(0,20)):
+    for i in tqdm(range(0,50)):
         prompt = dataset[i]['text']
         tokenized_prompt = tokenizer.encode(prompt, return_tensors="pt")[:,8000:]
         tokenized_prompt = tokenized_prompt.split(seq_len, dim=-1)[:-1]
@@ -51,6 +51,33 @@ def convert_pg19_dataset(tokenizer, seq_len = 4096, end = 20):
              tokenized_prompts.append(tokenized_prompt[i])
     data = torch.cat(tokenized_prompts, dim=0).repeat(end,1)
     return TensorDataset(data)
+
+def convert_multilexsum_dataset(tokenizer, seq_len = 4096, end = 20):
+    shots = 0
+    all_data = load_dataset("allenai/multi_lexsum", name="v20230518", cache_dir='/rscratch/rishabhtiwari/cache/')
+    all_data = all_data.filter(lambda x: x["summary/short"] is not None)
+
+    user_template = "\nYou are given the legal documents in a civil rights lawsuit, and you are tasked to summarize the case. Write a concise summary of one paragraph (200 to 250 words). The summary should contain a short description of the background, the parties involved, and the outcomes of the case.\n\n{demo}Legal documents:\n{context}"
+    system_template = "\n\nNow please summarize the case. Summary:"
+    all_data = all_data['test']
+    all_data = all_data.map(lambda x: {
+        "context": '\n\n'.join(x["sources"]),
+        "demo": "",
+        "answer": x["summary/short"],
+        "question": "",
+    })
+    tokenized_prompts = []
+    system_template_len = tokenizer.encode(system_template, return_tensors="pt").shape[1]
+    for i in range(50):
+        tokenized_prompt = tokenizer.encode(user_template.format(demo="", context=all_data['context'][i]), return_tensors="pt")[:, :seq_len-system_template_len]
+        tokenized_prompt[:, 0] = tokenizer.bos_token_id
+        tokenized_prompt = torch.cat((tokenized_prompt, tokenizer.encode(system_template, return_tensors="pt")), axis=1)
+        if tokenized_prompt.shape[1] >= seq_len:
+            tokenized_prompts.append(tokenized_prompt)
+        if len(tokenized_prompts) > 10:
+            break
+    assert len(tokenized_prompts) > 10, "Less than 10 prompts"
+    return tokenized_prompts
 
 # if __name__ == "__main__":
 #     from transformers import LlamaTokenizer, DataCollatorForLanguageModeling

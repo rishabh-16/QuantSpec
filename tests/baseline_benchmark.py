@@ -5,7 +5,7 @@ sys.path.append("..")
 from pathlib import Path
 import torch.distributed as dist
 from QuantSpec_magidec.Engine.utils import setup_seed, sampling_argmax_batch
-from QuantSpec_magidec.Data.data_converter import convert_pg19_dataset
+from QuantSpec_magidec.Data.data_converter import convert_pg19_dataset, convert_multilexsum_dataset
 from transformers import AutoTokenizer
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
@@ -15,6 +15,7 @@ from QuantSpec_magidec.Engine.backend import LMBackend
 parser = argparse.ArgumentParser(description='Process model configuration and partitions.')
 parser.add_argument('--model', type=Path, default=Path("checkpoints/meta-llama/Llama-2-7b-hf/model.pth"), help='model')
 parser.add_argument('--model_name', type=str, default="meta-llama/Llama-2-7b-hf", help='model name')
+parser.add_argument('--dataset', type=str, default="pg19", help='dataset')
 
 parser.add_argument('--B', type=int, default=1, help='Batch size.')
 parser.add_argument('--prefix_len', type=int, default=4000, help='Prefix length')
@@ -38,7 +39,8 @@ if use_tp:
         # only print on rank 0
         print = lambda *args, **kwargs: None
 setup_seed(args.seed)
-print(f"Using device={DEVICE}")
+
+# print(f"Using device={DEVICE}")
 MAX_LEN = args.prefix_len + args.gen_len
 DTYPE = torch.bfloat16
 BATCH_SIZE = args.B
@@ -56,9 +58,14 @@ if tokenizer.unk_token_id is not None:
     eot_2 = tokenizer.unk_token_id
 else:
     eot_2 = tokenizer.encode("<|eot_id|>")[-1]
-print(f"eot_1: {eot_1}, eot_2: {eot_2}")
+# print(f"eot_1: {eot_1}, eot_2: {eot_2}")
 
-dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len)
+if args.dataset == "pg19":
+    dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len)
+elif args.dataset == "multilexsum":
+    dataset = convert_multilexsum_dataset(tokenizer=tokenizer, seq_len=args.prefix_len)
+else:
+    raise ValueError(f"Unknown dataset: {args.dataset}")
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
 num_eval_steps = min(10, len(dataloader))
 
@@ -70,31 +77,30 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     input_ids = batch[0].to(DEVICE)
     terminate = False
     output = input_ids.clone()
-    logits = engine.encode(input_ids=input_ids)[:,-1]
-    next_tokens = sampling_argmax_batch(logits=logits)
+    next_tokens = engine.encode(input_ids=input_ids)[:,-1:]
+    # next_tokens = sampling_argmax_batch(logits=logits)
     output = torch.cat((output, next_tokens),dim=-1)
     torch.cuda.synchronize()
     t1 = time.perf_counter()
     while output.size(1)<args.prefix_len + args.gen_len and terminate == False:
         input_ids=next_tokens.clone()
-        logits = engine.inference(input_ids=input_ids)[:, -1]
-        next_tokens = sampling_argmax_batch(logits=logits)
+        next_tokens = engine.inference(input_ids=input_ids)
+        # next_tokens = sampling_argmax_batch(logits=logits)
         output = torch.cat((output, next_tokens),dim=-1)
         model_steps += 1
         if (next_tokens[:,-1] == eot_1)._is_any_true() or (next_tokens[:,-1] == eot_2)._is_any_true(): terminate = True
     torch.cuda.synchronize()
     t2=time.perf_counter()
 
+    total_time += t2-t1
     if args.printoutput:
         for i in range(BATCH_SIZE):
             print(tokenizer.decode(output[i, args.prefix_len:]))
 
-    total_time += t2-t1
-    print(f"Tokens per second: {model_steps/total_time}")
     if step < 3:
         total_time = 0.0
         model_steps = 0
     if use_tp:
         dist.barrier()
-
+print(f"Tokens per second: {model_steps/total_time}")
 print(f"method latency: {total_time/model_steps}")

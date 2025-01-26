@@ -8,6 +8,7 @@ from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verif
 from QuantSpec_magidec.kernels.flashdecoding.int8_upperlower.int8kv_upperlower_flash_decoding import token_decode_attention_int8kv_upperlower_flash_decoding
 
 from marlin import marlin_cuda
+import torch.distributed as dist
 
 torch.library.define(
     "mylib::marlin_mul",
@@ -516,6 +517,18 @@ def load_model_quantspec(checkpoint_path, device, precision, use_tp, rank_group=
         from QuantSpec_magidec.Engine.tp import apply_tp
         print("Applying tensor parallel to model ...")
         apply_tp(model, rank_group, group=group)
+    
+    # dist.barrier()
+    # if dist.get_rank() == 0:
+    #     print("Entering IPython shell on rank 0...")
+    #     import IPython; IPython.embed()
+    # # Synchronize after exiting the shell
+    # dist.barrier()
+    # if dist.get_rank() == 1:
+    #     print("Entering IPython shell on rank 1...")
+    #     import IPython; IPython.embed()
+    # # Synchronize after exiting the shell
+    # dist.barrier()
 
     model = model.to(device=device, dtype=precision)
     return model.eval()

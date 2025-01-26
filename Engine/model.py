@@ -41,23 +41,31 @@ class ModelArgs:
         self.head_dim = self.dim // self.n_head
 
     @classmethod
-    def from_name(cls, name: str):
-        if name in transformer_configs:
-            return cls(**transformer_configs[name])
-        # fuzzy search
-        config = [config for config in transformer_configs if config.lower() in str(name).lower()]
-        # We may have two or more configs matched (e.g. "7B" and "Mistral-7B"). Find the best config match,
-        # take longer name (as it have more symbols matched)
-        if len(config) > 1:
-            config.sort(key=len, reverse=True)
-            assert len(config[0]) != len(config[1]), name # make sure only one 'best' match
-        return cls(**transformer_configs[config[0]])
+    def from_name(cls, name: str, quantize: bool = False):
+        if name.lower() in transformer_configs:
+            config = transformer_configs[name.lower()].copy()
+        elif name in transformer_configs:
+            config = transformer_configs[name].copy()
+        else:
+            print("model name not found, using fuzzy search")
+            # fuzzy search
+            config_names = [config for config in transformer_configs if config.lower() in str(name).lower()]
+            # We may have two or more configs matched (e.g. "7B" and "Mistral-7B"). Find the best config match,
+            # take longer name (as it have more symbols matched)
+            if len(config_names) > 1:
+                config_names.sort(key=len, reverse=True)
+                assert len(config_names[0]) != len(config_names[1]), name # make sure only one 'best' match
+                config = transformer_configs[config_names[0]].copy()
+        if quantize:
+            config['quantize'] = True
+        return cls(**config)
 
 
 transformer_configs = {
     "llama-2-7b": dict(block_size=4096, n_layer=32, n_head=32, dim=4096),
     "Llama-2-7b-hf": dict(block_size=4096, n_layer=32, n_head=32, dim=4096),
     'llama-2-7b-32k': dict(block_size=32768, n_layer=32, dim= 4096, vocab_size=32000, scaling_factor=8),
+    "LWM-Text-Chat-128K": dict(block_size=131072, n_layer=32, dim= 4096, vocab_size=32000, scaling_factor=1, rope_base=10000000.0, original_max_position_embeddings=131072),
     "llama-2-13b": dict(block_size=4096, n_layer=40, n_head=40, dim=5120),
     "llama-2-70b": dict(block_size=4096, n_layer=80, n_head=64, dim=8192, n_local_heads=8, intermediate_size=28672),
     "llama-3-8b": dict(block_size=8192, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000),
@@ -89,6 +97,9 @@ class Transformer(nn.Module):
         self.mask_cache: Optional[Tensor] = None
         self.max_batch_size = -1
         self.max_seq_length = -1
+        self.world_size = None
+        self.rank = None
+        self.process_group = None
 
     def setup_caches(self, max_batch_size, max_seq_length):
         if self.max_seq_length >= max_seq_length and self.max_batch_size >= max_batch_size:
@@ -124,7 +135,17 @@ class Transformer(nn.Module):
             x = layer(x, freqs_cis, cache_seqlens)
         x = self.norm(x)
         logits = self.output(x)
-        return logits
+        if self.process_group != None:
+            all_max_value = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=logits.dtype, device=logits.device)
+            all_max_indices = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=torch.long, device=logits.device)
+            all_max_value[:, :, self.rank], all_max_indices[:, :, self.rank] = torch.max(logits, dim=-1)
+            all_max_indices[:, :, self.rank] += self.rank * logits.shape[-1]
+            dist.all_reduce(all_max_value, group = self.process_group)
+            dist.all_reduce(all_max_indices, group = self.process_group)
+            global_select_indices = torch.argmax(all_max_value, dim=-1)
+            global_indices = torch.gather(all_max_indices, dim=-1, index=global_select_indices.unsqueeze(-1))
+            return global_indices.squeeze(-1)
+        return torch.argmax(logits, dim=-1)
 
     def prefill(self, idx: Tensor, input_pos: Optional[Tensor], cache_seqlens: Tensor) -> Tensor:
         assert self.freqs_cis is not None, "Caches must be initialized first"
@@ -135,7 +156,17 @@ class Transformer(nn.Module):
             x = layer.prefill(x, freqs_cis, cache_seqlens)
         x = self.norm(x)
         logits = self.output(x)
-        return logits
+        if self.process_group != None:
+            all_max_value = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=logits.dtype, device=logits.device)
+            all_max_indices = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=torch.long, device=logits.device)
+            all_max_value[:, :, self.rank], all_max_indices[:, :, self.rank] = torch.max(logits, dim=-1)
+            all_max_indices[:, :, self.rank] += self.rank * logits.shape[-1]
+            dist.all_reduce(all_max_value, group = self.process_group)
+            dist.all_reduce(all_max_indices, group = self.process_group)
+            global_select_indices = torch.argmax(all_max_value, dim=-1)
+            global_indices = torch.gather(all_max_indices, dim=-1, index=global_select_indices.unsqueeze(-1))
+            return global_indices.squeeze(-1)
+        return torch.argmax(logits, dim=-1)
 
     @classmethod
     def from_name(cls, name: str):

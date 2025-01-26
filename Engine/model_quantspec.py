@@ -57,6 +57,8 @@ class ModelArgs:
     def from_name(cls, name: str, quantize: bool = False):
         if name.lower() in transformer_configs:
             config = transformer_configs[name.lower()].copy()
+        elif name in transformer_configs:
+            config = transformer_configs[name].copy()
         else:
             print("model name not found, using fuzzy search")
             # fuzzy search
@@ -185,6 +187,9 @@ class Transformer(nn.Module):
         self.mask_cache: Optional[Tensor] = None
         self.max_batch_size = -1
         self.max_seq_length = -1
+        self.world_size = None
+        self.rank = None
+        self.process_group = None
 
     def setup_caches(self, max_batch_size, max_seq_length, **cache_kwargs):
         if self.max_seq_length >= max_seq_length and self.max_batch_size >= max_batch_size:
@@ -192,7 +197,7 @@ class Transformer(nn.Module):
         head_dim = self.config.dim // self.config.n_head
         self.max_seq_length = max_seq_length
         self.max_batch_size = max_batch_size
-        dtype = self.output.weight.dtype
+        dtype = self.output.weight.dtype if self.output.weight.dtype == torch.float16 else torch.bfloat16
         if hasattr(self.output, "scales"):
             dtype = self.output.scales.dtype
         elif hasattr(self.output, "scales_and_zeros"):
@@ -219,7 +224,17 @@ class Transformer(nn.Module):
             x = layer(x, freqs_cis, cache_seqlens, qcache_seqlens)
         x = self.norm(x)
         logits = self.output(x)
-        return logits
+        if self.process_group != None:
+            all_max_value = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=logits.dtype, device=logits.device)
+            all_max_indices = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=torch.long, device=logits.device)
+            all_max_value[:, :, self.rank], all_max_indices[:, :, self.rank] = torch.max(logits, dim=-1)
+            all_max_indices[:, :, self.rank] += self.rank * logits.shape[-1]
+            dist.all_reduce(all_max_value, group = self.process_group)
+            dist.all_reduce(all_max_indices, group = self.process_group)
+            global_select_indices = torch.argmax(all_max_value, dim=-1)
+            global_indices = torch.gather(all_max_indices, dim=-1, index=global_select_indices.unsqueeze(-1))
+            return global_indices.squeeze(-1)
+        return torch.argmax(logits, dim=-1)
 
     def prefill(self, idx: Tensor, input_pos: Optional[Tensor], cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
         assert self.freqs_cis is not None, "Caches must be initialized first"
@@ -230,7 +245,17 @@ class Transformer(nn.Module):
             x = layer.prefill(x, freqs_cis, cache_seqlens, qcache_seqlens)
         x = self.norm(x)
         logits = self.output(x)
-        return logits
+        if self.process_group != None:
+            all_max_value = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=logits.dtype, device=logits.device)
+            all_max_indices = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=torch.long, device=logits.device)
+            all_max_value[:, :, self.rank], all_max_indices[:, :, self.rank] = torch.max(logits, dim=-1)
+            all_max_indices[:, :, self.rank] += self.rank * logits.shape[-1]
+            dist.all_reduce(all_max_value, group = self.process_group)
+            dist.all_reduce(all_max_indices, group = self.process_group)
+            global_select_indices = torch.argmax(all_max_value, dim=-1)
+            global_indices = torch.gather(all_max_indices, dim=-1, index=global_select_indices.unsqueeze(-1))
+            return global_indices.squeeze(-1)
+        return torch.argmax(logits, dim=-1)
     
     def draft_forward(self, idx: Tensor, input_pos: Optional[Tensor], cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
         assert self.freqs_cis is not None, "Caches must be initialized first"
@@ -241,7 +266,17 @@ class Transformer(nn.Module):
             x = layer.draft_forward(x, freqs_cis, cache_seqlens, qcache_seqlens)
         x = self.norm(x)
         logits = self.output(x)
-        return logits
+        if self.process_group != None:
+            all_max_value = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=logits.dtype, device=logits.device)
+            all_max_indices = torch.zeros((x.shape[0], x.shape[1], self.world_size), dtype=torch.long, device=logits.device)
+            all_max_value[:, :, self.rank], all_max_indices[:, :, self.rank] = torch.max(logits, dim=-1)
+            all_max_indices[:, :, self.rank] += self.rank * logits.shape[-1]
+            dist.all_reduce(all_max_value, group = self.process_group)
+            dist.all_reduce(all_max_indices, group = self.process_group)
+            global_select_indices = torch.argmax(all_max_value, dim=-1)
+            global_indices = torch.gather(all_max_indices, dim=-1, index=global_select_indices.unsqueeze(-1))
+            return global_indices.squeeze(-1)
+        return torch.argmax(logits, dim=-1)
 
     @classmethod
     def from_name(cls, name: str, quantize: bool = False):
@@ -326,6 +361,20 @@ class Attention(nn.Module):
         q = apply_rotary_emb(q.view(bsz, seqlen, self.n_head, self.head_dim), freqs_cis).transpose(1,2)
         k = apply_rotary_emb(k.view(bsz, seqlen, self.n_local_heads, self.head_dim), freqs_cis).transpose(1,2)
         v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim).transpose(1,2)
+        # try:
+        #     dist.barrier()
+        #     if dist.get_rank() == 0:
+        #         print("Entering IPython shell on rank 0...")
+        #         import IPython; IPython.embed()
+        #     # Synchronize after exiting the shell
+        #     dist.barrier()
+        #     if dist.get_rank() == 1:
+        #         print("Entering IPython shell on rank 1...")
+        #         import IPython; IPython.embed()
+        #     # Synchronize after exiting the shell
+        #     dist.barrier()
+        # except:
+        #     import IPython; IPython.embed()
 
         self.kv_cache.update(k, v, cache_seqlens, qcache_seqlens)
         cache_seqlens = cache_seqlens + k.shape[-2]
@@ -359,7 +408,7 @@ class Attention(nn.Module):
         
         y = self.wo(y)
         if self.process_group != None:
-            dist.all_reduce(y)
+            dist.all_reduce(y, group = self.process_group)
 
         return y
 
@@ -386,7 +435,7 @@ class Attention(nn.Module):
 
         y = self.wo(y)
         if self.process_group != None:
-            dist.all_reduce(y)
+            dist.all_reduce(y, group = self.process_group)
         return y
     
     def draft_forward(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor, qcache_seqlens: Tensor) -> Tensor:
@@ -436,7 +485,7 @@ class Attention(nn.Module):
 
         y = self.wo(y)
         if self.process_group != None:
-            dist.all_reduce(y)
+            dist.all_reduce(y, group = self.process_group)
 
         return y
 
@@ -458,7 +507,7 @@ class FeedForward(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         y = self.w2(F.silu(self.w1(x)) * self.w3(x))
         if self.process_group != None:
-            dist.all_reduce(y)
+            dist.all_reduce(y, group = self.process_group)
         return y
     
     def draft_forward(self, x: Tensor) -> Tensor:
@@ -467,7 +516,7 @@ class FeedForward(nn.Module):
         else:
             y = self.w2(F.silu(self.w1(x)) * self.w3(x))
         if self.process_group != None:
-            dist.all_reduce(y)
+            dist.all_reduce(y, group = self.process_group)
         return y
 
 

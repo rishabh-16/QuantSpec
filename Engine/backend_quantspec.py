@@ -41,12 +41,13 @@ class LMBackend:
         torch._inductor.config.coordinate_descent_tuning = True
         torch._inductor.config.triton.unique_kernel_names = True
         torch._inductor.config.fx_graph_cache = True # Experimental feature to reduce compilation times, will be on by default in future
+        torch._functorch.config.enable_autograd_cache = True
         for key in self.model_forward.keys():
-            self.model_forward[key] = torch.compile(self.model_forward[key], mode="reduce-overhead", fullgraph=True)
+            self.model_forward[key] = torch.compile(self.model_forward[key], mode="max-autotune", fullgraph=True)
         for key in self.draft_forward.keys():
-            self.draft_forward[key] = torch.compile(self.draft_forward[key], mode="reduce-overhead", fullgraph=True)
+            self.draft_forward[key] = torch.compile(self.draft_forward[key], mode="max-autotune", fullgraph=True)
         if encode:
-             self.prefill = torch.compile(self.prefill, mode="reduce-overhead", fullgraph=True)
+             self.prefill = torch.compile(self.prefill, mode="max-autotune", fullgraph=True)
              
     @torch.inference_mode()
     def inference(self, input_ids: torch.LongTensor, benchmark = False):
