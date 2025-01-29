@@ -79,6 +79,48 @@ def convert_multilexsum_dataset(tokenizer, seq_len = 4096, end = 20):
     assert len(tokenized_prompts) > 10, "Less than 10 prompts"
     return tokenized_prompts
 
+def load_infbench(tokenizer, seq_len = 4096, end = 20):
+    from datasets import load_dataset, Value, Sequence, Features
+    ft = Features({"id": Value("int64"), "context": Value("string"), "input": Value("string"), "answer": Sequence(Value("string")), "options": Sequence(Value("string"))})
+    data = load_dataset("xinrongzhang2022/infinitebench", features=ft, cache_dir='/rscratch/rishabhtiwari/cache/')
+   
+    # https://github.com/OpenBMB/InfiniteBench/blob/main/src/prompt.py 
+    # slightly modified to be consistent with other datasets, shouldn't affect performance        
+    user_template = "You are given a book and you are tasked to summarize it. Write a summary of about 1000 to 1200 words. Only write about the plot and characters of the story. Do not discuss the themes or background of the book. Do not provide any analysis or commentary.\n\n{demo}{context}."
+    system_template = "\n\nNow summarize the book. Summary:"
+    data = data["longbook_sum_eng"]
+    # prompt_template = user_template + "\n\n" + system_template
+
+    def process_example(example):
+        update = {"question": example["input"], "demo": ""}
+        return update
+    
+    all_data = data.map(process_example)
+
+    tokenized_prompts = []
+    system_template_len = tokenizer.encode(system_template, return_tensors="pt").shape[1]
+    for i in range(50):
+        tokenized_prompt = tokenizer.encode(user_template.format(demo="", context=all_data[i]['context']), return_tensors="pt")[:, :seq_len-system_template_len]
+        tokenized_prompt[:, 0] = tokenizer.bos_token_id
+        tokenized_prompt = torch.cat((tokenized_prompt, tokenizer.encode(system_template, return_tensors="pt")), axis=1)
+        if tokenized_prompt.shape[1] >= seq_len:
+            tokenized_prompts.append(tokenized_prompt)
+        if len(tokenized_prompts) > 10:
+            break
+    assert len(tokenized_prompts) > 10, "Less than 10 prompts"
+    return tokenized_prompts
+    # if max_test_samples is not None:
+    #     data = data.shuffle(seed=seed).select(range(min(len(data), max_test_samples)))
+
+    # return {
+    #     "data": data,
+    #     "prompt_template": prompt_template,
+    #     "user_template": user_template,
+    #     "system_template": system_template,
+    #     "post_process": post_process,
+    # }
+
+
 # if __name__ == "__main__":
 #     from transformers import LlamaTokenizer, DataCollatorForLanguageModeling
 #     from torch.utils.data import DataLoader, TensorDataset

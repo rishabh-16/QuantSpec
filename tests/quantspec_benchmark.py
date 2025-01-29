@@ -5,7 +5,7 @@ sys.path.append("..")
 from pathlib import Path
 import torch.distributed as dist
 from QuantSpec_magidec.Engine.utils import setup_seed, cuda_graph_for_sampling_argmax_batch, sampling_argmax_batch
-from QuantSpec_magidec.Data.data_converter import convert_pg19_dataset, convert_multilexsum_dataset
+from QuantSpec_magidec.Data.data_converter import convert_pg19_dataset, convert_multilexsum_dataset, load_infbench
 from transformers import AutoTokenizer
 from torch.utils.data.dataloader import DataLoader
 from tqdm import tqdm
@@ -93,6 +93,8 @@ if args.dataset == "pg19":
     dataset = convert_pg19_dataset(tokenizer=tokenizer, seq_len=args.prefix_len) #, end=no_runs)
 elif args.dataset == "multilexsum":
     dataset = convert_multilexsum_dataset(tokenizer=tokenizer, seq_len=args.prefix_len) #, end=no_runs)
+elif args.dataset == "infbench":
+    dataset = load_infbench(tokenizer=tokenizer, seq_len=args.prefix_len) #, end=no_runs)
 else:
     raise ValueError(f"Unknown dataset {args.dataset}")
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, drop_last=True)
@@ -110,6 +112,7 @@ if benchmark:
 acceptance_rates = []
 
 for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
+    # torch.cuda.reset_peak_memory_stats()  # Reset before tracking
     accepted_tokens_count = 0
     total_tokens_count = 0
     if step >= num_eval_steps:
@@ -242,6 +245,9 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
             verify_loop = 0.0
     if use_tp:
         dist.barrier()
+    
+    peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)  # Convert to MB
+    # print(f"Peak GPU Memory Usage: {peak_memory:.2f} GB")
 
 # Calculate acceptance rate
 acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if len(acceptance_rates) > 0 else 0
