@@ -54,7 +54,7 @@ def convert_pg19_dataset(tokenizer, seq_len = 4096, end = 20):
 
 def convert_multilexsum_dataset(tokenizer, seq_len = 4096, end = 20):
     shots = 0
-    all_data = load_dataset("allenai/multi_lexsum", name="v20230518", cache_dir='/home/rishabhtiwari/cache/')
+    all_data = load_dataset("allenai/multi_lexsum", name="v20230518", cache_dir='/rscratch/rishabhtiwari/cache/')
     all_data = all_data.filter(lambda x: x["summary/short"] is not None)
 
     user_template = "\nYou are given the legal documents in a civil rights lawsuit, and you are tasked to summarize the case. Write a concise summary of one paragraph (200 to 250 words). The summary should contain a short description of the background, the parties involved, and the outcomes of the case.\n\n{demo}Legal documents:\n{context}"
@@ -82,7 +82,7 @@ def convert_multilexsum_dataset(tokenizer, seq_len = 4096, end = 20):
 def load_infbench(tokenizer, seq_len = 4096, end = 20):
     from datasets import load_dataset, Value, Sequence, Features
     ft = Features({"id": Value("int64"), "context": Value("string"), "input": Value("string"), "answer": Sequence(Value("string")), "options": Sequence(Value("string"))})
-    data = load_dataset("xinrongzhang2022/infinitebench", features=ft, cache_dir='/home/rishabhtiwari/cache/')
+    data = load_dataset("xinrongzhang2022/infinitebench", features=ft, cache_dir='/rscratch/rishabhtiwari/cache/')
    
     # https://github.com/OpenBMB/InfiniteBench/blob/main/src/prompt.py 
     # slightly modified to be consistent with other datasets, shouldn't affect performance        

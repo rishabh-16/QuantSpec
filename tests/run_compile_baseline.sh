@@ -25,14 +25,14 @@
     --standalone \
     --nproc_per_node=$(echo $1 | tr ',' ' ' | wc -w) \
     tests/baseline_benchmark.py \
-    --model /home/rishabhtiwari/cache/meta-llama/Llama-3.1-8B/model.pth \
+    --model /rscratch/rishabhtiwari/cache/meta-llama/Llama-3.1-8B/model.pth \
     --model_name meta-llama/Llama-3.1-8B \
     --dataset multilexsum \
     --rank_group $(seq -s ' ' 0 $(($(echo $1 | tr ',' ' ' | wc -w) - 1))) \
     --B 1 \
     --prefix_len $2 \
-    --gen_len 90
-    
+    --gen_len 90 \
+    --compile
     # PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun \
 #     --standalone \
 #     --nproc_per_node=$(echo $1 | tr ',' ' ' | wc -w) \

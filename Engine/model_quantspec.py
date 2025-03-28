@@ -91,7 +91,7 @@ class KVCache(nn.Module):
         self.register_buffer('v_cache', torch.zeros(cache_shape, dtype=dtype))
 
         
-        residual_cache_shape = (max_batch_size, n_heads, 2*self.residual_len+1, head_dim)
+        residual_cache_shape = (max_batch_size, 2*self.residual_len+1, n_heads, head_dim)
         qkey_cache_shape = (max_batch_size, max_seq_length//(16//self.k_bits), n_heads, head_dim)
         keyparams_cache_shape = (max_batch_size, max_seq_length//self.group_size, n_heads, head_dim)
 
