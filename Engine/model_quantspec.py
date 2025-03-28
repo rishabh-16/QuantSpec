@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import Optional
+from bit_decode import kvcache_pack_int, fwd_kvcache_int
 
 import torch
 import torch.nn as nn
@@ -78,32 +79,31 @@ class ModelArgs:
 class KVCache(nn.Module):
     def __init__(self, max_batch_size, max_seq_length, n_heads, head_dim, dtype=torch.bfloat16, **cache_kwargs):
         super().__init__()
-        qtype = torch.int8
+        qtype = torch.uint16
         self.max_seq_length = max_seq_length
         self.residual_len = cache_kwargs.get("residual_len", 128)
         self.group_size = cache_kwargs.get("group_size", 128)
         self.k_bits = cache_kwargs.get("k_bits", 4)
         self.v_bits = cache_kwargs.get("v_bits", 4)
 
+        cache_shape = (max_batch_size, max_seq_length, n_heads, head_dim)
+        self.register_buffer('k_cache', torch.zeros(cache_shape, dtype=dtype))
+        self.register_buffer('v_cache', torch.zeros(cache_shape, dtype=dtype))
+
+        
         residual_cache_shape = (max_batch_size, n_heads, 2*self.residual_len+1, head_dim)
-        qkey_cache_shape = (max_batch_size, n_heads, max_seq_length, head_dim//(8//self.k_bits))
-        keymin_cache_shape = (max_batch_size, n_heads, max_seq_length//self.group_size, head_dim)
-        keyscale_cache_shape = (max_batch_size, n_heads, max_seq_length//self.group_size, head_dim)
+        qkey_cache_shape = (max_batch_size, max_seq_length//(16//self.k_bits), n_heads, head_dim)
+        keyparams_cache_shape = (max_batch_size, max_seq_length//self.group_size, n_heads, head_dim)
 
-        qval_trans_cache_shape = (max_batch_size, n_heads, head_dim, max_seq_length//(8//self.v_bits))
-        valmin_cache_shape = (max_batch_size, n_heads, head_dim//self.group_size, max_seq_length)
-        valscale_cache_shape = (max_batch_size, n_heads, head_dim//self.group_size, max_seq_length)
+        qval_trans_cache_shape = (max_batch_size, max_seq_length, n_heads, head_dim//(16//self.v_bits))
+        valparams_cache_shape = (max_batch_size, head_dim//self.group_size, n_heads, max_seq_length)
 
-        self.register_buffer('k_cache', torch.zeros(residual_cache_shape, dtype=dtype))
-        self.register_buffer('v_cache', torch.zeros(residual_cache_shape, dtype=dtype))
-        self.register_buffer('qk_cache_ubits', torch.zeros(qkey_cache_shape, dtype=qtype))
-        self.register_buffer('qk_cache_lbits', torch.zeros(qkey_cache_shape, dtype=qtype))
-        self.register_buffer('kmin_cache', torch.zeros(keymin_cache_shape, dtype=dtype))
-        self.register_buffer('kscale_cache', torch.zeros(keyscale_cache_shape, dtype=dtype))
-        self.register_buffer('qval_trans_cache_ubits', torch.zeros(qval_trans_cache_shape, dtype=qtype))
-        self.register_buffer('qval_trans_cache_lbits', torch.zeros(qval_trans_cache_shape, dtype=qtype))
-        self.register_buffer('valmin_cache', torch.zeros(valmin_cache_shape, dtype=dtype))
-        self.register_buffer('valscale_cache', torch.zeros(valscale_cache_shape, dtype=dtype))
+        self.register_buffer('k_cache_residual', torch.zeros(residual_cache_shape, dtype=dtype))
+        self.register_buffer('v_cache_residual', torch.zeros(residual_cache_shape, dtype=dtype))
+        self.register_buffer('qk_cache', torch.zeros(qkey_cache_shape, dtype=qtype))
+        self.register_buffer('kparams_cache', torch.zeros(keyparams_cache_shape, dtype=torch.float32))
+        self.register_buffer('qval_trans_cache', torch.zeros(qval_trans_cache_shape, dtype=qtype))
+        self.register_buffer('vparams_cache', torch.zeros(valparams_cache_shape, dtype=torch.float32))
         self.register_buffer('batch_indices',torch.arange(max_batch_size).unsqueeze(1))
 
 
@@ -111,15 +111,23 @@ class KVCache(nn.Module):
         output = k_cache, v_cache
 
         prefill_len = k_cache.shape[2]
+        head_dim = k_cache.shape[-1]
         assert prefill_len == v_cache.shape[2], "k and v must have the same length in prefill"
         if prefill_len > 2*self.residual_len:
             assert self.residual_len % self.group_size == 0, "Residual length must be divisible by group size"
             to_quant_len = prefill_len-self.residual_len-(prefill_len%self.group_size)
             if prefill_len-to_quant_len > 0:
-                self.k_cache[:, :, :prefill_len-to_quant_len].copy_(k_cache[:, :, to_quant_len:].clone())
-                self.v_cache[:, :, :prefill_len-to_quant_len].copy_(v_cache[:, :, to_quant_len:].clone())
+                self.k_cache_residual[:, :, :prefill_len-to_quant_len].copy_(k_cache[:, :, to_quant_len:].clone())
+                self.v_cache_residual[:, :, :prefill_len-to_quant_len].copy_(v_cache[:, :, to_quant_len:].clone())
 
-            qk_cache_ubits, qk_cache_lbits, kscale_cache, kmin_cache = triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim(k_cache[:, :, :to_quant_len].clone().contiguous(), self.group_size, self.k_bits)
+            k_pack = self.qk_cache[:, :to_quant_len//(16//4)].clone()
+            k_params = self.kparams_cache[:, :to_quant_len//128].clone()
+            v_pack = self.qval_trans_cache[:, :to_quant_len].clone()
+            v_params = self.vparams_cache[:, :, :, :to_quant_len].clone()
+            sm_scale = 1.0 / math.sqrt(head_dim)
+            quant_mode = "k-channel"
+
+            kvcache_pack_int(k_cache[:, :, :to_quant_len].clone().contiguous(), self.group_size, self.k_bits)
             self.qk_cache_ubits[:, :, :to_quant_len].copy_(qk_cache_ubits)
             self.qk_cache_lbits[:, :, :to_quant_len].copy_(qk_cache_lbits)
             self.kmin_cache[:, :, :to_quant_len//self.group_size].copy_(kmin_cache)

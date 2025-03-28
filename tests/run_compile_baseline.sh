@@ -31,8 +31,7 @@
     --rank_group $(seq -s ' ' 0 $(($(echo $1 | tr ',' ' ' | wc -w) - 1))) \
     --B 1 \
     --prefix_len $2 \
-    --gen_len 90 \
-    --compile 
+    --gen_len 90
     
     # PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun \
 #     --standalone \
