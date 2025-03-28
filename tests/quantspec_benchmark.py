@@ -246,7 +246,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     if use_tp:
         dist.barrier()
     
-    peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)  # Convert to MB
+    # peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)  # Convert to MB
     # print(f"Peak GPU Memory Usage: {peak_memory:.2f} GB")
 
 # Calculate acceptance rate

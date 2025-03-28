@@ -44,8 +44,8 @@ marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/lwm_text_chat
 
 
 
-for prefix_len in 16000 32000 64000 128000; do
-  for gamma in 2; do
+for prefix_len in 8192; do
+  for gamma in 3 5; do
     for prefix_ratio in 0.25; do
       streamingllm_budget=$(printf "%.0f" $(echo "$prefix_len * $prefix_ratio" | bc))
       # if [ $prefix_len -gt 64000 ]; then
