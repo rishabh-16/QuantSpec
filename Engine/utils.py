@@ -3,12 +3,36 @@ import numpy as np
 import random
 from torch.nn.functional import softmax
 from flash_attn import flash_attn_with_kvcache
+from QuantSpec_magidec.bit_decode.bit_decode_interface import fwd_kvcache_int
 from QuantSpec_magidec.kernels.flashdecoding.int8_verify_upperlower.int8kv_verify_upperlower_flash_decoding import token_decode_attention_int8kv_verify_upperlower_flash_decoding
 
 from QuantSpec_magidec.kernels.flashdecoding.int8_upperlower.int8kv_upperlower_flash_decoding import token_decode_attention_int8kv_upperlower_flash_decoding
 
 from marlin import marlin_cuda
 import torch.distributed as dist
+
+
+torch.library.define(
+    "mylib::bit_fwd_kvcache_int",
+    "(Tensor(a!) q, \
+    Tensor(b!) k_pack, \
+    Tensor(c!) k_params, \
+    Tensor(d!) v_pack, \
+    Tensor(e!) v_params, \
+    Scalar sm_scale, \
+    Scalar group_size, \
+    Scalar num_bits \
+    ) -> Tensor",
+)
+
+@torch.library.impl("mylib::bit_fwd_kvcache_int", "cuda")
+def bit_fwd_kvcache_int(q, k_pack, k_params, v_pack, v_params, sm_scale, group_size, num_bits):
+    return fwd_kvcache_int(q, k_pack, k_params, v_pack, v_params, None, sm_scale, "k-channel",  group_size, num_bits)
+
+@torch.library.impl_abstract("mylib::bit_fwd_kvcache_int")
+def bit_fwd_kvcache_int_abstract(q, k_pack, k_params, v_pack, v_params, sm_scale, group_size, num_bits):
+    return torch.empty(q.shape, dtype=q.dtype, device=q.device)
+
 
 torch.library.define(
     "mylib::marlin_mul",

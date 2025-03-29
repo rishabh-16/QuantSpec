@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from typing import Optional
-from bit_decode import kvcache_pack_int, fwd_kvcache_int
 
 import torch
 import torch.nn as nn
@@ -11,6 +10,7 @@ import math
 from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
 import marlin
 from QuantSpec_magidec.Engine.model import transformer_configs
+from QuantSpec_magidec.bit_decode import fwd_kvcache_int, kvcache_pack_int
 
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
@@ -98,8 +98,6 @@ class KVCache(nn.Module):
         qval_trans_cache_shape = (max_batch_size, max_seq_length, n_heads, head_dim//(16//self.v_bits))
         valparams_cache_shape = (max_batch_size, head_dim//self.group_size, n_heads, max_seq_length)
 
-        self.register_buffer('k_cache_residual', torch.zeros(residual_cache_shape, dtype=dtype))
-        self.register_buffer('v_cache_residual', torch.zeros(residual_cache_shape, dtype=dtype))
         self.register_buffer('qk_cache', torch.zeros(qkey_cache_shape, dtype=qtype))
         self.register_buffer('kparams_cache', torch.zeros(keyparams_cache_shape, dtype=torch.float32))
         self.register_buffer('qval_trans_cache', torch.zeros(qval_trans_cache_shape, dtype=qtype))
@@ -108,16 +106,15 @@ class KVCache(nn.Module):
 
 
     def prefill_update(self, k_cache, v_cache, prefill_len):
-        output = k_cache, v_cache
         head_dim = k_cache.shape[-1]
         
-        assert prefill_len == v_cache.shape[2], "k and v must have the same length in prefill"
+        # assert prefill_len == v_cache.shape[2], "k and v must have the same length in prefill"
         if prefill_len > 2*self.residual_len:
             assert self.residual_len % self.group_size == 0, "Residual length must be divisible by group size"
             to_quant_len = prefill_len-self.residual_len-(prefill_len%self.group_size)
-            if prefill_len-to_quant_len > 0:
-                self.k_cache_residual[:, :, :prefill_len-to_quant_len].copy_(k_cache[:, :, to_quant_len:].clone())
-                self.v_cache_residual[:, :, :prefill_len-to_quant_len].copy_(v_cache[:, :, to_quant_len:].clone())
+            # if prefill_len-to_quant_len > 0:
+            #     self.k_cache_residual[:, :, :prefill_len-to_quant_len].copy_(k_cache[:, :, to_quant_len:].clone())
+            #     self.v_cache_residual[:, :, :prefill_len-to_quant_len].copy_(v_cache[:, :, to_quant_len:].clone())
 
             k_pack = self.qk_cache[:, :to_quant_len//(16//self.k_bits)].clone()
             k_params = self.kparams_cache[:, :to_quant_len//self.group_size].clone()
@@ -130,7 +127,6 @@ class KVCache(nn.Module):
             kvcache_pack_int(k_cache[:, :to_quant_len].clone().contiguous(), k_pack, k_params, 
                              v_cache[:, :to_quant_len].clone().contiguous(), v_pack, v_params, 
                              None,
-                             sm_scale,
                              cu_seqlens_k,
                              to_quant_len,
                              quant_mode,
@@ -140,37 +136,22 @@ class KVCache(nn.Module):
             self.kparams_cache[:, :to_quant_len//self.group_size].copy_(k_params)
             self.qval_trans_cache[:, :to_quant_len].copy_(v_pack)
             self.vparams_cache[:, :, :, :to_quant_len].copy_(v_params)
-        else:
-            self.k_cache[:, :, :prefill_len].copy_(k_cache)
-            self.v_cache[:, :, :prefill_len].copy_(v_cache)
-        return output
     
     def update(self, k_cache, v_cache, cache_seqlens, qcache_seqlens):
 
-        # TODO: make this more efficient
-        # residual_lens = cache_seqlens - qcache_seqlens
-        # bsz = k_cache.shape[0]
-        # assert bsz == 1, "Batch size > 1 not supported yet"
-        # for b in range(bsz):
-        #     start_idx = residual_lens[b]
-        #     end_idx = residual_lens[b] + k_cache.shape[2]
-        #     self.k_cache[b, :, start_idx:end_idx, :].copy_(k_cache[b])
-        #     self.v_cache[b, :, start_idx:end_idx, :].copy_(v_cache[b])
+        bsz, update_len, num_heads, head_dim = k_cache.shape
 
-        bsz, num_heads, update_len, head_dim = k_cache.shape
-        seq_len = self.k_cache.shape[2]
-
-        residual_lens = cache_seqlens - qcache_seqlens
+        residual_lens = cache_seqlens # - qcache_seqlens
         
         # Create index tensor for scatter
         indices = torch.arange(update_len, device=k_cache.device)
-        indices = indices.view(1, 1, -1, 1)  # [1, 1, update_len, 1]
-        indices = indices + residual_lens.view(-1, 1, 1, 1)  # [bsz, 1, update_len, 1]
-        indices = indices.expand(bsz, num_heads, update_len, head_dim)
+        indices = indices.view(1, -1, 1, 1)  # [1, update_len, 1, 1]
+        indices = indices + residual_lens.view(-1, 1, 1, 1)  # [bsz, update_len, 1, 1]
+        indices = indices.expand(bsz, update_len, num_heads, head_dim)
         
         # Perform scatter operations
-        self.k_cache.scatter_(dim=2, index=indices, src=k_cache)
-        self.v_cache.scatter_(dim=2, index=indices, src=v_cache)
+        self.k_cache.scatter_(dim=1, index=indices, src=k_cache)
+        self.v_cache.scatter_(dim=1, index=indices, src=v_cache)
 
     def reset(self):
         self.k_cache.zero_()
@@ -179,8 +160,6 @@ class KVCache(nn.Module):
         self.kparams_cache.zero_()
         self.qval_trans_cache.zero_()
         self.vparams_cache.zero_()
-        self.k_cache_residual.zero_()
-        self.v_cache_residual.zero_()
 
 class Transformer(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
@@ -366,52 +345,19 @@ class Attention(nn.Module):
         q, k, v = self.wqkv(x).split([self.dim, kv_size, kv_size], dim=-1)
 
         # TODO: check transpose, might affect rotary emb
-        q = apply_rotary_emb(q.view(bsz, seqlen, self.n_head, self.head_dim), freqs_cis).transpose(1,2)
-        k = apply_rotary_emb(k.view(bsz, seqlen, self.n_local_heads, self.head_dim), freqs_cis).transpose(1,2)
-        v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim).transpose(1,2)
-        # try:
-        #     dist.barrier()
-        #     if dist.get_rank() == 0:
-        #         print("Entering IPython shell on rank 0...")
-        #         import IPython; IPython.embed()
-        #     # Synchronize after exiting the shell
-        #     dist.barrier()
-        #     if dist.get_rank() == 1:
-        #         print("Entering IPython shell on rank 1...")
-        #         import IPython; IPython.embed()
-        #     # Synchronize after exiting the shell
-        #     dist.barrier()
-        # except:
-        #     import IPython; IPython.embed()
+        q = apply_rotary_emb(q.view(bsz, seqlen, self.n_head, self.head_dim), freqs_cis)
+        k = apply_rotary_emb(k.view(bsz, seqlen, self.n_local_heads, self.head_dim), freqs_cis)
+        v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim)
 
-        self.kv_cache.update(k, v, cache_seqlens, qcache_seqlens)
-        cache_seqlens = cache_seqlens + k.shape[-2]
+        if self.kv_cache is not None:
+            k_cache, v_cache = self.kv_cache.k_cache, self.kv_cache.v_cache
+
+        y = self._attn(q, k_cache, v_cache, k, v, cache_seqlens)
+
+        # self.kv_cache.update(k, v, cache_seqlens, qcache_seqlens)
+        # cache_seqlens = cache_seqlens + k.shape[-2]
         
-        repeat_factor = self.n_head // self.n_local_heads
-
-        y = torch.ops.mylib.flash_verification(
-            q=q,
-            cache_quant_k_upper=self.repeat_kv(self.kv_cache.qk_cache_ubits, repeat_factor),
-            cache_quant_k_lower=self.repeat_kv(self.kv_cache.qk_cache_lbits, repeat_factor), 
-            cache_scale_k=self.repeat_kv(self.kv_cache.kscale_cache, repeat_factor),
-            cache_min_k=self.repeat_kv(self.kv_cache.kmin_cache, repeat_factor),
-            cache_quant_v_upper=self.repeat_kv(self.kv_cache.qval_trans_cache_ubits, repeat_factor),
-            cache_quant_v_lower=self.repeat_kv(self.kv_cache.qval_trans_cache_lbits, repeat_factor),
-            cache_scale_v=self.repeat_kv(self.kv_cache.valscale_cache, repeat_factor),
-            cache_min_v=self.repeat_kv(self.kv_cache.valmin_cache, repeat_factor),
-            kbit=self.kv_cache.k_bits,
-            vbit=self.kv_cache.v_bits,
-            group_size=self.kv_cache.group_size,
-            full_k=self.repeat_kv(self.kv_cache.k_cache, repeat_factor),
-            full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
-            precision=8,
-            max_seq_length=self.kv_cache.max_seq_length,
-            max_residual_len=2 * self.kv_cache.residual_len + 1,
-            qcache_len=qcache_seqlens[0],
-            residual_len=cache_seqlens[0] - qcache_seqlens[0],
-        )
-
-        y = y.transpose(1, 2).reshape(bsz, seqlen, self.dim).contiguous()
+        y = y.reshape(bsz, seqlen, self.dim).contiguous()
 
         
         y = self.wo(y)
@@ -437,7 +383,7 @@ class Attention(nn.Module):
             k_cache, v_cache = self.kv_cache.k_cache, self.kv_cache.v_cache
 
 
-        y = torch.ops.mylib.custom_func(q, k_cache, v_cache, k, v, cache_seqlens)        
+        y = torch.ops.mylib.custom_func(q, k_cache, v_cache, k, v, cache_seqlens)
         self.kv_cache.prefill_update(k_cache, v_cache, seqlen)
 
         y = y.contiguous().view(bsz, seqlen, self.dim)
@@ -454,43 +400,48 @@ class Attention(nn.Module):
         q, k, v = self.wqkv(x).split([self.dim, kv_size, kv_size], dim=-1)
 
         # TODO: check transpose
-        q = apply_rotary_emb(q.view(bsz, seqlen, self.n_head, self.head_dim), freqs_cis).transpose(1,2)
-        k = apply_rotary_emb(k.view(bsz, seqlen, self.n_local_heads, self.head_dim), freqs_cis).transpose(1,2)
-        v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim).transpose(1,2)
+        q = apply_rotary_emb(q.view(bsz, seqlen, self.n_head, self.head_dim), freqs_cis)
+        k = apply_rotary_emb(k.view(bsz, seqlen, self.n_local_heads, self.head_dim), freqs_cis)
+        v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim)
+
+        # import IPython
+        # IPython.embed()
         
-        # if self.kv_cache is not None:
-        #     k, v = self.kv_cache.update(cache_seqlens, k, v)
+        # self.kv_cache.update(k, v, cache_seqlens, qcache_seqlens)
+        
+        k, v = self.kv_cache.k_cache[:, 31872:], self.kv_cache.v_cache[:, 31872:]
+        # Compute attention using q, k, v
+        bsz, seqlen, n_head, head_dim = q.shape
+        
+        # Reshape q for attention computation
+        
 
-        self.kv_cache.update(k, v, cache_seqlens, qcache_seqlens)
-        cache_seqlens = cache_seqlens + k.shape[-2]
+        sm_scale = 1.0 / math.sqrt(self.head_dim)
+        out_bitdecode = torch.ops.mylib.bit_fwd_kvcache_int(
+                    q,
+                    self.kv_cache.qk_cache[:, :31872//(16//self.kv_cache.k_bits)], self.kv_cache.kparams_cache[:, :31872//self.kv_cache.group_size], 
+                    self.kv_cache.qval_trans_cache[:, :31872], self.kv_cache.vparams_cache[:,:,:,:31872],
+                    sm_scale,
+                    self.kv_cache.group_size,
+                    self.kv_cache.k_bits
+                )
 
+        q = q.transpose(1, 2)  # [bsz, n_head, seqlen, head_dim]
+        k = k.transpose(1, 2)  # [bsz, n_local_heads, seqlen, head_dim] 
+        v = v.transpose(1, 2)  # [bsz, n_local_heads, seqlen, head_dim]
+
+        # Scale query
+        q = q * (1.0 / math.sqrt(self.head_dim))
+        
         repeat_factor = self.n_head // self.n_local_heads
-
-        # y = torch.ops.mylib.custom_func_2(q, k, v)
-
-        y = torch.ops.mylib.flash_decoding(
-            q=q,
-            cache_quant_k_upper=self.repeat_kv(self.kv_cache.qk_cache_ubits, repeat_factor),
-            cache_quant_k_lower=self.repeat_kv(self.kv_cache.qk_cache_lbits, repeat_factor), 
-            cache_scale_k=self.repeat_kv(self.kv_cache.kscale_cache, repeat_factor),
-            cache_min_k=self.repeat_kv(self.kv_cache.kmin_cache, repeat_factor),
-            cache_quant_v_upper=self.repeat_kv(self.kv_cache.qval_trans_cache_ubits, repeat_factor),
-            cache_quant_v_lower=self.repeat_kv(self.kv_cache.qval_trans_cache_lbits, repeat_factor),
-            cache_scale_v=self.repeat_kv(self.kv_cache.valscale_cache, repeat_factor),
-            cache_min_v=self.repeat_kv(self.kv_cache.valmin_cache, repeat_factor),
-            kbit=self.kv_cache.k_bits,
-            vbit=self.kv_cache.v_bits,
-            group_size=self.kv_cache.group_size,
-            full_k=self.repeat_kv(self.kv_cache.k_cache, repeat_factor),
-            full_v=self.repeat_kv(self.kv_cache.v_cache, repeat_factor),
-            precision=4,
-            max_seq_length=self.kv_cache.max_seq_length,
-            max_residual_len=2 * self.kv_cache.residual_len + 1,
-            qcache_len=qcache_seqlens[0],
-            residual_len=cache_seqlens[0] - qcache_seqlens[0],
-        )
+        # Compute attention scores and weighted sum
+        scores = torch.matmul(q, self.repeat_kv(k, repeat_factor).transpose(-2, -1))  # [bsz, n_head, seqlen, seqlen]
+        scores = F.softmax(scores, dim=-1)
+        y1 = torch.matmul(scores, self.repeat_kv(v, repeat_factor))  # [bsz, n_head, seqlen, head_dim]
+        y2 = out_bitdecode.reshape(bsz, seqlen, self.dim).contiguous()
         
-        y = y.transpose(1, 2).reshape(bsz, seqlen, self.dim).contiguous()
+        # Add the two attention outputs
+        y = y1.transpose(1, 2).reshape(bsz, seqlen, self.dim) + y2
 
         y = self.wo(y)
         if self.process_group != None:

@@ -169,6 +169,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 
         draft_tokens = tokens_buffer[:, 1:args.gamma+1]
         flag_accept_matrix = (target_tokens[:, :args.gamma] == draft_tokens)  # shape: (BATCH_SIZE, gamma)
+        flag_accept_matrix = torch.rand(flag_accept_matrix.shape, device=DEVICE) < 0.95
         eot_condition = ((draft_tokens == eot_1) | (draft_tokens == eot_2))  # shape: (BATCH_SIZE, gamma)
         accept_flags_int = (flag_accept_matrix & (~eot_condition)).int()
         accept_flags_cumprod = torch.cumprod(accept_flags_int, dim=1)

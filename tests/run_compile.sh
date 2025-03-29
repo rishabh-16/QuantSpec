@@ -22,10 +22,12 @@
 #         --gen_len 90 \
 #         --compile
 
-model="/rscratch/rishabhtiwari/cache/LargeWorldModel/LWM-Text-Chat-128K/model.pth"
-model_name="LargeWorldModel/LWM-Text-Chat-128K"
+# model="/rscratch/rishabhtiwari/cache/LargeWorldModel/LWM-Text-Chat-128K/model.pth"
+# model_name="LargeWorldModel/LWM-Text-Chat-128K"
+model="/rscratch/rishabhtiwari/cache/meta-llama/Llama-3.1-8B/model.pth"
+model_name="meta-llama/Llama-3.1-8B"
 dataset="multilexsum"
-marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/lwm_text_chat_128k_checkpoint.pt.marlin.g128"
+marlin_path="/rscratch/rishabhtiwari/checkpoint.pt.marlin.g128"
 
 # model="/rscratch/rishabhtiwari/cache/LargeWorldModel/LWM-Text-128K/model.pth"
 # model_name="LargeWorldModel/LWM-Text-128K"
@@ -44,8 +46,8 @@ marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/lwm_text_chat
 
 
 
-for prefix_len in 8192; do
-  for gamma in 3 5; do
+for prefix_len in 32000; do
+  for gamma in 2; do
     for prefix_ratio in 0.25; do
       streamingllm_budget=$(printf "%.0f" $(echo "$prefix_len * $prefix_ratio" | bc))
       # if [ $prefix_len -gt 64000 ]; then
@@ -72,10 +74,10 @@ for prefix_len in 8192; do
         --rank_group $(seq -s ' ' 0 $(($(echo $gpus | tr ',' ' ' | wc -w) - 1))) \
         --gamma $gamma \
         --B 1 \
-        --wq \
         --prefix_len $prefix_len \
         --gen_len 90 \
         --compile \
+        --wq \
         --benchmark
     done
   done
