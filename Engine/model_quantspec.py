@@ -107,11 +107,10 @@ class KVCache(nn.Module):
         self.register_buffer('batch_indices',torch.arange(max_batch_size).unsqueeze(1))
 
 
-    def prefill_update(self, k_cache, v_cache):
+    def prefill_update(self, k_cache, v_cache, prefill_len):
         output = k_cache, v_cache
-
-        prefill_len = k_cache.shape[2]
         head_dim = k_cache.shape[-1]
+        
         assert prefill_len == v_cache.shape[2], "k and v must have the same length in prefill"
         if prefill_len > 2*self.residual_len:
             assert self.residual_len % self.group_size == 0, "Residual length must be divisible by group size"
@@ -120,24 +119,27 @@ class KVCache(nn.Module):
                 self.k_cache_residual[:, :, :prefill_len-to_quant_len].copy_(k_cache[:, :, to_quant_len:].clone())
                 self.v_cache_residual[:, :, :prefill_len-to_quant_len].copy_(v_cache[:, :, to_quant_len:].clone())
 
-            k_pack = self.qk_cache[:, :to_quant_len//(16//4)].clone()
-            k_params = self.kparams_cache[:, :to_quant_len//128].clone()
+            k_pack = self.qk_cache[:, :to_quant_len//(16//self.k_bits)].clone()
+            k_params = self.kparams_cache[:, :to_quant_len//self.group_size].clone()
             v_pack = self.qval_trans_cache[:, :to_quant_len].clone()
             v_params = self.vparams_cache[:, :, :, :to_quant_len].clone()
             sm_scale = 1.0 / math.sqrt(head_dim)
             quant_mode = "k-channel"
+            cu_seqlens_k = torch.arange(0, (1 + 1) * to_quant_len, to_quant_len, dtype=torch.int32, device=k_cache.device)
 
-            kvcache_pack_int(k_cache[:, :, :to_quant_len].clone().contiguous(), self.group_size, self.k_bits)
-            self.qk_cache_ubits[:, :, :to_quant_len].copy_(qk_cache_ubits)
-            self.qk_cache_lbits[:, :, :to_quant_len].copy_(qk_cache_lbits)
-            self.kmin_cache[:, :, :to_quant_len//self.group_size].copy_(kmin_cache)
-            self.kscale_cache[:, :, :to_quant_len//self.group_size].copy_(kscale_cache)
-            
-            qval_trans_cache_ubits, qval_trans_cache_lbits, valscale_cache, valmin_cache = triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim(v_cache[:, :, :to_quant_len].clone().transpose(2,3).contiguous(), self.group_size, self.v_bits)
-            self.qval_trans_cache_ubits[:, :, :, :to_quant_len//(8//self.v_bits)].copy_(qval_trans_cache_ubits)
-            self.qval_trans_cache_lbits[:, :, :, :to_quant_len//(8//self.v_bits)].copy_(qval_trans_cache_lbits)
-            self.valmin_cache[:, :, :, :to_quant_len].copy_(valmin_cache)
-            self.valscale_cache[:, :, :, :to_quant_len].copy_(valscale_cache)
+            kvcache_pack_int(k_cache[:, :to_quant_len].clone().contiguous(), k_pack, k_params, 
+                             v_cache[:, :to_quant_len].clone().contiguous(), v_pack, v_params, 
+                             None,
+                             sm_scale,
+                             cu_seqlens_k,
+                             to_quant_len,
+                             quant_mode,
+                             self.group_size, self.k_bits
+                             )
+            self.qk_cache[:, :to_quant_len//(16//self.k_bits)].copy_(k_pack)
+            self.kparams_cache[:, :to_quant_len//self.group_size].copy_(k_params)
+            self.qval_trans_cache[:, :to_quant_len].copy_(v_pack)
+            self.vparams_cache[:, :, :, :to_quant_len].copy_(v_params)
         else:
             self.k_cache[:, :, :prefill_len].copy_(k_cache)
             self.v_cache[:, :, :prefill_len].copy_(v_cache)
@@ -173,14 +175,12 @@ class KVCache(nn.Module):
     def reset(self):
         self.k_cache.zero_()
         self.v_cache.zero_()
-        self.qk_cache_ubits.zero_()
-        self.qk_cache_lbits.zero_()
-        self.kmin_cache.zero_()
-        self.kscale_cache.zero_()
-        self.qval_trans_cache_ubits.zero_()
-        self.qval_trans_cache_lbits.zero_()
-        self.valmin_cache.zero_()
-        self.valscale_cache.zero_()
+        self.qk_cache.zero_()
+        self.kparams_cache.zero_()
+        self.qval_trans_cache.zero_()
+        self.vparams_cache.zero_()
+        self.k_cache_residual.zero_()
+        self.v_cache_residual.zero_()
 
 class Transformer(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
@@ -433,12 +433,13 @@ class Attention(nn.Module):
         q = apply_rotary_emb(q, freqs_cis)
         k = apply_rotary_emb(k, freqs_cis)
 
-        
-        k, v = self.kv_cache.prefill_update(k.transpose(1,2), v.transpose(1,2))
+        if self.kv_cache is not None:
+            k_cache, v_cache = self.kv_cache.k_cache, self.kv_cache.v_cache
 
-        # for prefill, use original impl
 
-        y = torch.ops.mylib.custom_func_2(q, k.transpose(1,2).contiguous(), v.transpose(1,2).contiguous())
+        y = torch.ops.mylib.custom_func(q, k_cache, v_cache, k, v, cache_seqlens)        
+        self.kv_cache.prefill_update(k_cache, v_cache, seqlen)
+
         y = y.contiguous().view(bsz, seqlen, self.dim)
 
         y = self.wo(y)
