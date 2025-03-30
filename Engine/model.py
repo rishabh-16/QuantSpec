@@ -30,7 +30,7 @@ class ModelArgs:
     low_freq_factor: int = None # added new
     high_freq_factor: int = None  # added new
     original_max_position_embeddings: int = None   # added new
-
+    qkv_bias: bool = False
     def __post_init__(self):
         if self.n_local_heads == -1:
             self.n_local_heads = self.n_head
@@ -79,6 +79,8 @@ transformer_configs = {
     "tinyllama": dict(block_size =2048, n_layer=22, n_head=32, n_local_heads=4, dim=2048, intermediate_size=5632, vocab_size=32000),
     "llama-3.1-8b": dict(block_size=131072, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000.0, scaling_factor=8, high_freq_factor=4, low_freq_factor=1, original_max_position_embeddings=8192),
     "Meta-Llama-3.1-8B": dict(block_size=131072, n_layer=32, n_head=32, n_local_heads=8, dim=4096, intermediate_size=14336, vocab_size=128256, rope_base=500000.0, scaling_factor=8, high_freq_factor=4, low_freq_factor=1, original_max_position_embeddings=8192),
+    "Qwen2.5-7B": dict(block_size=131072, n_layer=28, n_head=28, n_local_heads=4, dim=3584, intermediate_size=18944, vocab_size=152064, rope_base=1000000.0, qkv_bias=True, norm_eps=1e-6),
+    "Qwen2.5-7B-Instruct": dict(block_size=131072, n_layer=28, n_head=28, n_local_heads=4, dim=3584, intermediate_size=18944, vocab_size=152064, rope_base=1000000.0, qkv_bias=True, norm_eps=1e-6),
 }
 
 class KVCache(nn.Module):
@@ -204,7 +206,7 @@ class Attention(nn.Module):
 
         total_head_dim = (config.n_head + 2 * config.n_local_heads) * config.head_dim
         # key, query, value projections for all heads, but in a batch
-        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=False)
+        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=config.qkv_bias)
         self.wo = nn.Linear(config.dim, config.dim, bias=False)
         self.kv_cache = None
         self.process_group = None
@@ -226,6 +228,11 @@ class Attention(nn.Module):
             wk = state_dict.pop(prefix + "wk.weight")
             wv = state_dict.pop(prefix + "wv.weight")
             state_dict[prefix + "wqkv.weight"] = torch.cat([wq, wk, wv])
+        if prefix + "wq.bias" in state_dict:
+            bq = state_dict.pop(prefix + "wq.bias")
+            bk = state_dict.pop(prefix + "wk.bias")
+            bv = state_dict.pop(prefix + "wv.bias")
+            state_dict[prefix + "wqkv.bias"] = torch.cat([bq, bk, bv])
 
     def forward(self, x: Tensor, freqs_cis: Tensor, cache_seqlens: Tensor) -> Tensor:
         bsz, seqlen, _ = x.shape

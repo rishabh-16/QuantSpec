@@ -10,11 +10,34 @@ import math
 from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import triton_int8toint8_upperlower_quantize_along_penultimate_dim_and_pack_along_last_dim
 import marlin
 from QuantSpec_magidec.Engine.model import transformer_configs
+from gptqmodel.nn_modules.qlinear.marlin import MarlinQuantLinear
 
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
         return n
     return n + k - (n % k)
+
+class marlin_Layer2(MarlinQuantLinear):
+    def __init__(self, infeatures, outfeatures, groupsize=-1):
+        super().__init__(bits=4, groupsize=groupsize, desc_act=True, sym=True, in_features=infeatures, out_features=outfeatures)
+
+    def forward(self, x):
+        out = torch.ops.mylib.apply_gptq_marlin_linear(
+            input=x,
+            weight=self.qweight,
+            weight_scale=self.scales,
+            weight_zp=self.zp,
+            g_idx=self.g_idx,
+            g_idx_sort_indices=self.g_idx_sort_indices,
+            workspace=self.workspace,
+            num_bits=self.bits,
+            output_size_per_partition=self.out_features,
+            input_size_per_partition=self.in_features,
+            is_k_full=self.is_k_full,
+            bias=self.bias,
+            fp32=self.fp32,
+        )
+
 
 class marlin_Layer(marlin.Layer):
     def __init__(self, infeatures, outfeatures, groupsize=-1):
@@ -499,9 +522,9 @@ class FeedForward(nn.Module):
         
 
         if config.quantize:
-            self.w1_quantized = marlin_Layer(config.dim, config.intermediate_size, groupsize=128)
-            self.w3_quantized = marlin_Layer(config.dim, config.intermediate_size, groupsize=128)
-            self.w2_quantized = marlin_Layer(config.intermediate_size, config.dim, groupsize=128)
+            self.w1_quantized = marlin_Layer2(config.dim, config.intermediate_size, groupsize=128)
+            self.w3_quantized = marlin_Layer2(config.dim, config.intermediate_size, groupsize=128)
+            self.w2_quantized = marlin_Layer2(config.intermediate_size, config.dim, groupsize=128)
         self.process_group = None
 
     def forward(self, x: Tensor) -> Tensor:

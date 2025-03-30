@@ -36,7 +36,10 @@ def convert_hf_checkpoint(
     # Load the json file containing weight mapping
     model_map_json_safetensors = checkpoint_dir / 'model.safetensors.index.json'
     model_map_json_pytorch = checkpoint_dir / "pytorch_model.bin.index.json"
+    model_safetensors = checkpoint_dir / "model.safetensors"
+    model_pytorch = checkpoint_dir / "pytorch_model.bin"
     model_map_json = None
+    model_file = None
    
     try:
       assert model_map_json_safetensors.is_file()
@@ -53,8 +56,21 @@ def convert_hf_checkpoint(
         print(f"{model_map_json_pytorch} not found")
    
     if model_map_json is None:
-       print("Use single weight map")
-       bin_file = checkpoint_dir / "pytorch_model.bin"
+       try:
+           assert model_safetensors.is_file()
+           model_file = model_safetensors
+           print(f"Found safetensors weights at {model_safetensors}")
+       except AssertionError:
+           print(f"{model_safetensors} not found")
+    
+    if model_map_json is None and model_file is None:
+        try:
+           assert model_safetensors.is_file()
+           model_file = model_pytorch
+           print(f"Found pytorch weights at {model_pytorch}")
+        except AssertionError:
+           print(f"{model_pytorch} not found, can't find any weights or index.")
+           exit()
 
     if model_map_json != None:
         with open(model_map_json) as json_map:
@@ -75,16 +91,27 @@ def convert_hf_checkpoint(
         "model.norm.weight": "norm.weight",
         "lm_head.weight": "output.weight",
     }
+    if "qwen" in model_name.lower():
+        weight_map.update({
+            "model.layers.{}.self_attn.q_proj.bias": "layers.{}.attention.wq.bias",
+            "model.layers.{}.self_attn.k_proj.bias": "layers.{}.attention.wk.bias",
+            "model.layers.{}.self_attn.v_proj.bias": "layers.{}.attention.wv.bias",
+        })
     if model_map_json != None:
         bin_files = {checkpoint_dir / bin for bin in bin_index["weight_map"].values()}
 
     def permute(w, n_head):
-        dim = config.dim
-        return (
-            w.view(n_head, 2, config.head_dim // 2, dim)
-            .transpose(1, 2)
-            .reshape(config.head_dim * n_head, dim)
-        )
+        if len(w.shape) == 2:
+            # weight term
+            dim = config.dim
+            return (
+                w.view(n_head, 2, config.head_dim // 2, dim)
+                .transpose(1, 2)
+                .reshape(config.head_dim * n_head, dim)
+            )
+        else:
+            # bias term
+            return w.view(n_head, 2, config.head_dim // 2).transpose(1, 2).reshape(config.head_dim * n_head)
 
     merged_result = {}
     if model_map_json != None:
@@ -96,8 +123,13 @@ def convert_hf_checkpoint(
                 state_dict = torch.load(str(file), map_location="cpu", mmap=True, weights_only=True)
                 merged_result.update(state_dict)
     else:
-        state_dict = state_dict = torch.load(str(bin_file), map_location="cpu", mmap=True, weights_only=True)
-        merged_result.update(state_dict)
+        # state_dict = state_dict = torch.load(str(bin_file), map_location="cpu", mmap=True, weights_only=True)
+        if "safetensors" in str(model_file):
+            state_dict = load_safetensors_file(str(model_file), device="cpu")
+            merged_result.update(state_dict)
+        else:
+            state_dict = state_dict = torch.load(str(model_file), map_location="cpu", mmap=True, weights_only=True)
+            merged_result.update(state_dict)
  
     final_result = {}
     for key, value in merged_result.items():
@@ -112,6 +144,9 @@ def convert_hf_checkpoint(
             new_key = weight_map[key]
 
         final_result[new_key] = value
+    if 'output.weight' not in final_result.keys():
+        final_result['output.weight'] = merged_result["model.embed_tokens.weight"]
+        print("Use input embedding as the output lm_head")
 
     for key in tuple(final_result.keys()):
         if "wq" in key:
@@ -136,7 +171,7 @@ def convert_hf_checkpoint(
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description='Convert HuggingFace checkpoint.')
-    parser.add_argument('--checkpoint_dir', type=Path, default=Path("checkpoints/meta-llama/llama-2-7b-chat-hf"))
+    parser.add_argument('--checkpoint_dir', type=Path, default=Path("/scratch/models/meta-llama/Llama-3.2-1B"))
     parser.add_argument('--model_name', type=str, default=None)
 
     args = parser.parse_args()
