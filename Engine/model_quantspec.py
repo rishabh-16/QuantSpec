@@ -86,41 +86,43 @@ class KVCache(nn.Module):
         self.k_bits = cache_kwargs.get("k_bits", 4)
         self.v_bits = cache_kwargs.get("v_bits", 4)
 
-        cache_shape = (max_batch_size, max_seq_length, n_heads, head_dim)
-        self.register_buffer('k_cache', torch.zeros(cache_shape, dtype=dtype))
-        self.register_buffer('v_cache', torch.zeros(cache_shape, dtype=dtype))
-
         
         residual_cache_shape = (max_batch_size, 2*self.residual_len+1, n_heads, head_dim)
         qkey_cache_shape = (max_batch_size, max_seq_length//(16//self.k_bits), n_heads, head_dim)
         keyparams_cache_shape = (max_batch_size, max_seq_length//self.group_size, n_heads, head_dim)
 
-        qval_trans_cache_shape = (max_batch_size, max_seq_length, n_heads, head_dim//(16//self.v_bits))
+        qval_cache_shape = (max_batch_size, max_seq_length, n_heads, head_dim//(16//self.v_bits))
         valparams_cache_shape = (max_batch_size, head_dim//self.group_size, n_heads, max_seq_length)
 
+        self.register_buffer('k_cache', torch.zeros(residual_cache_shape, dtype=dtype))
+        self.register_buffer('v_cache', torch.zeros(residual_cache_shape, dtype=dtype))
         self.register_buffer('qk_cache', torch.zeros(qkey_cache_shape, dtype=qtype))
         self.register_buffer('kparams_cache', torch.zeros(keyparams_cache_shape, dtype=torch.float32))
-        self.register_buffer('qval_trans_cache', torch.zeros(qval_trans_cache_shape, dtype=qtype))
+        self.register_buffer('qval_cache', torch.zeros(qval_cache_shape, dtype=qtype))
         self.register_buffer('vparams_cache', torch.zeros(valparams_cache_shape, dtype=torch.float32))
+        self.register_buffer('qk_cache_down', torch.zeros(qkey_cache_shape, dtype=qtype))
+        self.register_buffer('kparams_cache_down', torch.zeros(keyparams_cache_shape, dtype=torch.float32))
+        self.register_buffer('qval_cache_down', torch.zeros(qval_cache_shape, dtype=qtype))
+        self.register_buffer('vparams_cache_down', torch.zeros(valparams_cache_shape, dtype=torch.float32))
         self.register_buffer('batch_indices',torch.arange(max_batch_size).unsqueeze(1))
 
 
-    def prefill_update(self, k_cache, v_cache, prefill_len):
-        head_dim = k_cache.shape[-1]
-        
-        # assert prefill_len == v_cache.shape[2], "k and v must have the same length in prefill"
+    def prefill_update(self, k_cache, v_cache):
+        output = (k_cache, v_cache)
+
+        prefill_len = k_cache.shape[1]
+        assert prefill_len == v_cache.shape[1], "k and v must have the same length in prefill"
         if prefill_len > 2*self.residual_len:
             assert self.residual_len % self.group_size == 0, "Residual length must be divisible by group size"
             to_quant_len = prefill_len-self.residual_len-(prefill_len%self.group_size)
-            # if prefill_len-to_quant_len > 0:
-            #     self.k_cache_residual[:, :, :prefill_len-to_quant_len].copy_(k_cache[:, :, to_quant_len:].clone())
-            #     self.v_cache_residual[:, :, :prefill_len-to_quant_len].copy_(v_cache[:, :, to_quant_len:].clone())
+            if prefill_len-to_quant_len > 0:
+                self.k_cache[:, :prefill_len-to_quant_len].copy_(k_cache[:, to_quant_len:].clone())
+                self.v_cache[:, :prefill_len-to_quant_len].copy_(v_cache[:, to_quant_len:].clone())
 
             k_pack = self.qk_cache[:, :to_quant_len//(16//self.k_bits)].clone()
             k_params = self.kparams_cache[:, :to_quant_len//self.group_size].clone()
-            v_pack = self.qval_trans_cache[:, :to_quant_len].clone()
+            v_pack = self.qval_cache[:, :to_quant_len].clone()
             v_params = self.vparams_cache[:, :, :, :to_quant_len].clone()
-            sm_scale = 1.0 / math.sqrt(head_dim)
             quant_mode = "k-channel"
             cu_seqlens_k = torch.arange(0, (1 + 1) * to_quant_len, to_quant_len, dtype=torch.int32, device=k_cache.device)
 
@@ -134,14 +136,20 @@ class KVCache(nn.Module):
                              )
             self.qk_cache[:, :to_quant_len//(16//self.k_bits)].copy_(k_pack)
             self.kparams_cache[:, :to_quant_len//self.group_size].copy_(k_params)
-            self.qval_trans_cache[:, :to_quant_len].copy_(v_pack)
+            self.qval_cache[:, :to_quant_len].copy_(v_pack)
             self.vparams_cache[:, :, :, :to_quant_len].copy_(v_params)
+
+            self.qk_cache_down[:, :to_quant_len//(16//self.k_bits)].copy_(k_pack)
+            self.kparams_cache_down[:, :to_quant_len//self.group_size].copy_(k_params)
+            self.qval_cache_down[:, :to_quant_len].copy_(v_pack)
+            self.vparams_cache_down[:, :, :, :to_quant_len].copy_(v_params)
+        return output
     
     def update(self, k_cache, v_cache, cache_seqlens, qcache_seqlens):
 
         bsz, update_len, num_heads, head_dim = k_cache.shape
 
-        residual_lens = cache_seqlens # - qcache_seqlens
+        residual_lens = cache_seqlens - qcache_seqlens
         
         # Create index tensor for scatter
         indices = torch.arange(update_len, device=k_cache.device)
@@ -158,8 +166,12 @@ class KVCache(nn.Module):
         self.v_cache.zero_()
         self.qk_cache.zero_()
         self.kparams_cache.zero_()
-        self.qval_trans_cache.zero_()
+        self.qval_cache.zero_()
         self.vparams_cache.zero_()
+        self.qk_cache_down.zero_()
+        self.kparams_cache_down.zero_()
+        self.qval_cache_down.zero_()
+        self.vparams_cache_down.zero_()
 
 class Transformer(nn.Module):
     def __init__(self, config: ModelArgs) -> None:
@@ -301,7 +313,7 @@ class Attention(nn.Module):
 
         total_head_dim = (config.n_head + 2 * config.n_local_heads) * config.head_dim
         # key, query, value projections for all heads, but in a batch
-        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=False)
+        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=config.qkv_bias)
         self.wo = nn.Linear(config.dim, config.dim, bias=False)
         self.kv_cache = None
         self.process_group = None
@@ -323,6 +335,12 @@ class Attention(nn.Module):
             wk = state_dict.pop(prefix + "wk.weight")
             wv = state_dict.pop(prefix + "wv.weight")
             state_dict[prefix + "wqkv.weight"] = torch.cat([wq, wk, wv])
+
+        if prefix + "wq.bias" in state_dict:    
+            bq = state_dict.pop(prefix + "wq.bias")
+            bk = state_dict.pop(prefix + "wk.bias")
+            bv = state_dict.pop(prefix + "wv.bias")
+            state_dict[prefix + "wqkv.bias"] = torch.cat([bq, bk, bv])
     
     def repeat_kv(self, hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         """
@@ -349,15 +367,29 @@ class Attention(nn.Module):
         k = apply_rotary_emb(k.view(bsz, seqlen, self.n_local_heads, self.head_dim), freqs_cis)
         v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim)
 
-        if self.kv_cache is not None:
-            k_cache, v_cache = self.kv_cache.k_cache, self.kv_cache.v_cache
-
-        y = self._attn(q, k_cache, v_cache, k, v, cache_seqlens)
-
         # self.kv_cache.update(k, v, cache_seqlens, qcache_seqlens)
-        # cache_seqlens = cache_seqlens + k.shape[-2]
+
+        y = self._attn(q, self.kv_cache.k_cache, self.kv_cache.v_cache, k, v, cache_seqlens-qcache_seqlens)
         
-        y = y.reshape(bsz, seqlen, self.dim).contiguous()
+        
+        # Compute attention using q, k, v
+        bsz, seqlen, n_head, head_dim = q.shape
+        
+        # Reshape q for attention computation
+        
+
+        sm_scale = 1.0 / math.sqrt(self.head_dim)
+        out_bitdecode = torch.ops.mylib.bit_fwd_kvcache_int_updown(
+                    q,
+                    self.kv_cache.qk_cache, self.kv_cache.qk_cache_down,
+                    self.kv_cache.kparams_cache, self.kv_cache.kparams_cache_down,
+                    self.kv_cache.qval_cache, self.kv_cache.qval_cache_down,
+                    self.kv_cache.vparams_cache, self.kv_cache.vparams_cache_down,
+                    sm_scale,
+                    self.kv_cache.group_size,
+                    self.kv_cache.k_bits
+                )
+        y = out_bitdecode.reshape(bsz, seqlen, self.dim).contiguous() + y.contiguous().view(bsz, seqlen, self.dim)
 
         
         y = self.wo(y)
@@ -379,13 +411,9 @@ class Attention(nn.Module):
         q = apply_rotary_emb(q, freqs_cis)
         k = apply_rotary_emb(k, freqs_cis)
 
-        if self.kv_cache is not None:
-            k_cache, v_cache = self.kv_cache.k_cache, self.kv_cache.v_cache
+        k, v = self.kv_cache.prefill_update(k, v)
 
-
-        y = torch.ops.mylib.custom_func(q, k_cache, v_cache, k, v, cache_seqlens)
-        self.kv_cache.prefill_update(k_cache, v_cache, seqlen)
-
+        y = torch.ops.mylib.custom_func_2(q, k.contiguous(), v.contiguous())
         y = y.contiguous().view(bsz, seqlen, self.dim)
 
         y = self.wo(y)
@@ -403,12 +431,10 @@ class Attention(nn.Module):
         q = apply_rotary_emb(q.view(bsz, seqlen, self.n_head, self.head_dim), freqs_cis)
         k = apply_rotary_emb(k.view(bsz, seqlen, self.n_local_heads, self.head_dim), freqs_cis)
         v = v.view(bsz, seqlen, self.n_local_heads, self.head_dim)
-
-        # import IPython
-        # IPython.embed()
         
         # self.kv_cache.update(k, v, cache_seqlens, qcache_seqlens)
-        
+
+        y = self._attn(q, self.kv_cache.k_cache, self.kv_cache.v_cache, k, v, cache_seqlens-qcache_seqlens)
         
         # Compute attention using q, k, v
         bsz, seqlen, n_head, head_dim = q.shape
@@ -419,30 +445,30 @@ class Attention(nn.Module):
         sm_scale = 1.0 / math.sqrt(self.head_dim)
         out_bitdecode = torch.ops.mylib.bit_fwd_kvcache_int(
                     q,
-                    self.kv_cache.qk_cache[:, :31872//(16//self.kv_cache.k_bits)], self.kv_cache.kparams_cache[:, :31872//self.kv_cache.group_size], 
-                    self.kv_cache.qval_trans_cache[:, :31872], self.kv_cache.vparams_cache[:,:,:,:31872],
+                    self.kv_cache.qk_cache, self.kv_cache.kparams_cache, 
+                    self.kv_cache.qval_cache, self.kv_cache.vparams_cache,
                     sm_scale,
                     self.kv_cache.group_size,
                     self.kv_cache.k_bits
                 )
 
-        k, v = self.kv_cache.k_cache[:, 31872:32001], self.kv_cache.v_cache[:, 31872:32001]
-        q = q.transpose(1, 2)  # [bsz, n_head, seqlen, head_dim]
-        k = k.transpose(1, 2)  # [bsz, n_local_heads, seqlen, head_dim] 
-        v = v.transpose(1, 2)  # [bsz, n_local_heads, seqlen, head_dim]
+        # k, v = self.kv_cache.k_cache[:, 31872:32001], self.kv_cache.v_cache[:, 31872:32001]
+        # q = q.transpose(1, 2)  # [bsz, n_head, seqlen, head_dim]
+        # k = k.transpose(1, 2)  # [bsz, n_local_heads, seqlen, head_dim] 
+        # v = v.transpose(1, 2)  # [bsz, n_local_heads, seqlen, head_dim]
 
-        # Scale query
-        q = q * (1.0 / math.sqrt(self.head_dim))
+        # # Scale query
+        # q = q * (1.0 / math.sqrt(self.head_dim))
         
-        repeat_factor = self.n_head // self.n_local_heads
-        # Compute attention scores and weighted sum
-        scores = torch.matmul(q, self.repeat_kv(k, repeat_factor).transpose(-2, -1))  # [bsz, n_head, seqlen, seqlen]
-        scores = F.softmax(scores, dim=-1)
-        y1 = torch.matmul(scores, self.repeat_kv(v, repeat_factor))  # [bsz, n_head, seqlen, head_dim]
-        y2 = out_bitdecode.reshape(bsz, seqlen, self.dim).contiguous()
+        # repeat_factor = self.n_head // self.n_local_heads
+        # # Compute attention scores and weighted sum
+        # scores = torch.matmul(q, self.repeat_kv(k, repeat_factor).transpose(-2, -1))  # [bsz, n_head, seqlen, seqlen]
+        # scores = F.softmax(scores, dim=-1)
+        # y1 = torch.matmul(scores, self.repeat_kv(v, repeat_factor))  # [bsz, n_head, seqlen, head_dim]
+        y = out_bitdecode.contiguous().reshape(bsz, seqlen, self.dim) + y.contiguous().view(bsz, seqlen, self.dim)
         
-        # Add the two attention outputs
-        y = y1.transpose(1, 2).reshape(bsz, seqlen, self.dim) + y2
+        # # Add the two attention outputs
+        # y = y1.transpose(1, 2).reshape(bsz, seqlen, self.dim) + y2
 
         y = self.wo(y)
         if self.process_group != None:

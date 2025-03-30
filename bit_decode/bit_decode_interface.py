@@ -84,3 +84,55 @@ def fwd_kvcache_int(q: torch.Tensor,
 
 
     return out_bit
+
+
+def fwd_kvcache_updown_int(q: torch.Tensor, 
+                          k_pack_up: torch.Tensor, k_pack_down: torch.Tensor,
+                          k_params_up: torch.Tensor, k_params_down: torch.Tensor,
+                          v_pack_up: torch.Tensor, v_pack_down: torch.Tensor,
+                          v_params_up: torch.Tensor, v_params_down: torch.Tensor,
+                          opt_block_table: Optional[torch.Tensor] = None,
+                          softmax_scale: float = 1.0,
+                          quant_mode: str = "k-channel",
+                          group_size: int = 128,
+                          num_bits: int = 4):
+                          
+
+    if num_bits == 4:
+        out_bit = bit_decode_cuda.fwd_kvcache_updown_i4(
+            q,
+            k_pack_up, k_pack_down,
+            k_params_up, k_params_down,
+            v_pack_up, v_pack_down,
+            v_params_up, v_params_down, 
+            opt_block_table,
+            softmax_scale,
+            quant_mode,
+            group_size,
+            False,          # is_causal
+            -1,             # window_size_left
+            -1,             # window_size_right
+            0.0,            # softcap
+            True,           # is_rotary_interleaved
+            0               # num_splits
+        )
+    else:
+        out_bit = bit_decode_cuda.fwd_kvcache_updown_i2(    
+            q,
+            k_pack_up, k_pack_down,
+            k_params_up, k_params_down,
+            v_pack_up, v_pack_down,
+            v_params_up, v_params_down, 
+            opt_block_table,
+            softmax_scale,
+            quant_mode,
+            group_size,
+            False,          # is_causal
+            -1,             # window_size_left
+            -1,             # window_size_right
+            0.0,            # softcap
+            True,           # is_rotary_interleaved
+            0               # num_splits
+        )
+
+    return out_bit

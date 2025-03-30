@@ -6,6 +6,7 @@
 # export TORCH_USE_CUDA_DSA=1
 # export CUDA_LAUNCH_BLOCKING=1
 # export TRITON_LOG_LEVEL=debug
+# export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun \
 #         --standalone \
@@ -46,7 +47,7 @@ marlin_path="/rscratch/rishabhtiwari/checkpoint.pt.marlin.g128"
 
 
 
-for prefix_len in 32000; do
+for prefix_len in 128000; do
   for gamma in 6; do
     for prefix_ratio in 0.25; do
       streamingllm_budget=$(printf "%.0f" $(echo "$prefix_len * $prefix_ratio" | bc))
@@ -76,8 +77,8 @@ for prefix_len in 32000; do
         --B 1 \
         --prefix_len $prefix_len \
         --gen_len 90 \
-        --compile \
         --wq \
+        --compile \
         --benchmark
     done
   done

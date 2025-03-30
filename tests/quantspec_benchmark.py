@@ -75,7 +75,7 @@ engine.load_model(checkpoint_path, use_tp=use_tp, rank_group = args.rank_group, 
 vocab_size = engine.model.config.vocab_size
 if args.compile:
     engine.compile()
-engine.setup_caches(max_batch_size=BATCH_SIZE, max_seq_length=MAX_LEN_TARGET)
+engine.setup_caches(max_batch_size=BATCH_SIZE, max_seq_length=args.prefix_len)
 
 # Load dataset
 tokenizer = AutoTokenizer.from_pretrained(args.model_name)
@@ -110,7 +110,6 @@ if benchmark:
 
 # Initialize counters for accepted tokens and total tokens
 acceptance_rates = []
-
 for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     # torch.cuda.reset_peak_memory_stats()  # Reset before tracking
     accepted_tokens_count = 0
@@ -169,7 +168,9 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 
         draft_tokens = tokens_buffer[:, 1:args.gamma+1]
         flag_accept_matrix = (target_tokens[:, :args.gamma] == draft_tokens)  # shape: (BATCH_SIZE, gamma)
-        flag_accept_matrix = torch.rand(flag_accept_matrix.shape, device=DEVICE) < 0.97
+        flag_accept_matrix = torch.ones(flag_accept_matrix.shape, device=DEVICE, dtype=torch.bool)
+        if step < 7:
+            flag_accept_matrix[:, args.gamma-1] = 0
         eot_condition = ((draft_tokens == eot_1) | (draft_tokens == eot_2))  # shape: (BATCH_SIZE, gamma)
         accept_flags_int = (flag_accept_matrix & (~eot_condition)).int()
         accept_flags_cumprod = torch.cumprod(accept_flags_int, dim=1)
@@ -247,8 +248,8 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     if use_tp:
         dist.barrier()
     
-    # peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)  # Convert to MB
-    # print(f"Peak GPU Memory Usage: {peak_memory:.2f} GB")
+    peak_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)  # Convert to MB
+    print(f"Peak GPU Memory Usage: {peak_memory:.2f} GB")
 
 # Calculate acceptance rate
 acceptance_rate = sum(acceptance_rates) / len(acceptance_rates) if len(acceptance_rates) > 0 else 0

@@ -76,8 +76,8 @@ for prefix_len in 16000; do
         --B 1 \
         --prefix_len $prefix_len \
         --gen_len 90 \
-        --compile \
         --wq \
+        --compile \
         --benchmark
     done
   done
