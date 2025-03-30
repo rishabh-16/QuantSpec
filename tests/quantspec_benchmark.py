@@ -169,7 +169,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
 
         draft_tokens = tokens_buffer[:, 1:args.gamma+1]
         flag_accept_matrix = (target_tokens[:, :args.gamma] == draft_tokens)  # shape: (BATCH_SIZE, gamma)
-        flag_accept_matrix = torch.rand(flag_accept_matrix.shape, device=DEVICE) < 0.95
+        flag_accept_matrix = torch.rand(flag_accept_matrix.shape, device=DEVICE) < 0.97
         eot_condition = ((draft_tokens == eot_1) | (draft_tokens == eot_2))  # shape: (BATCH_SIZE, gamma)
         accept_flags_int = (flag_accept_matrix & (~eot_condition)).int()
         accept_flags_cumprod = torch.cumprod(accept_flags_int, dim=1)
@@ -234,7 +234,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     acceptance_rates.append(accepted_tokens_count / total_tokens_count)
     if benchmark:
         print("target time :{:.5f}s, draft time :{:.5f}s, verify loop : {}, avg generate len per sentence: {}".format(target_time/target_steps, draft_time / target_steps, verify_loop/target_steps, num_gen_tokens/target_steps/BATCH_SIZE))
-        print(f"Tokens per second :{BATCH_SIZE*(num_gen_tokens/total_time)}")
+        print(f"Tokens per second :{BATCH_SIZE*((num_nodes.sum() - (input_ids.shape[1]+1)*BATCH_SIZE)/(end-start))}")
     if step < 3:   # TODO: revert to 10?
         total_time = 0.0
         num_gen_tokens = 0

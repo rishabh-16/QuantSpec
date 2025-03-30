@@ -46,16 +46,16 @@ marlin_path="/rscratch/rishabhtiwari/checkpoint.pt.marlin.g128"
 
 
 
-for prefix_len in 16000; do
+for prefix_len in 32000; do
   for gamma in 6; do
     for prefix_ratio in 0.25; do
       streamingllm_budget=$(printf "%.0f" $(echo "$prefix_len * $prefix_ratio" | bc))
       # if [ $prefix_len -gt 64000 ]; then
       #   gpus="4,5,6,7"
-      if [ $prefix_len -gt 32000 ]; then
-        gpus="6,7"
+      if [ $prefix_len -gt 128000 ]; then
+        gpus="0,1"
       else
-        gpus="6"
+        gpus="0"
       fi
 
       echo "----------------------------------------"

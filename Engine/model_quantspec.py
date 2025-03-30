@@ -409,7 +409,7 @@ class Attention(nn.Module):
         
         # self.kv_cache.update(k, v, cache_seqlens, qcache_seqlens)
         
-        k, v = self.kv_cache.k_cache[:, 31872:], self.kv_cache.v_cache[:, 31872:]
+        
         # Compute attention using q, k, v
         bsz, seqlen, n_head, head_dim = q.shape
         
@@ -426,6 +426,7 @@ class Attention(nn.Module):
                     self.kv_cache.k_bits
                 )
 
+        k, v = self.kv_cache.k_cache[:, 31872:32001], self.kv_cache.v_cache[:, 31872:32001]
         q = q.transpose(1, 2)  # [bsz, n_head, seqlen, head_dim]
         k = k.transpose(1, 2)  # [bsz, n_local_heads, seqlen, head_dim] 
         v = v.transpose(1, 2)  # [bsz, n_local_heads, seqlen, head_dim]
