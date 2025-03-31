@@ -12,8 +12,8 @@
     --standalone \
     --nproc_per_node=$(echo $1 | tr ',' ' ' | wc -w) \
     tests/baseline_benchmark.py \
-    --model /rscratch/rishabhtiwari/cache/Qwen/Qwen2.5-7B-Instruct/model.pth \
-    --model_name Qwen/Qwen2.5-7B-Instruct \
+    --model /rscratch/rishabhtiwari/cache/mistralai/Mistral-7B-v0.3/model.pth \
+    --model_name mistralai/Mistral-7B-v0.3 \
     --dataset multilexsum \
     --rank_group $(seq -s ' ' 0 $(($(echo $1 | tr ',' ' ' | wc -w) - 1))) \
     --B 1 \

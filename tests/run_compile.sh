@@ -3,9 +3,9 @@
 #     echo "Usage: $0 <cuda_device_number>"
 #     exit 1
 # fi
-# export TORCH_USE_CUDA_DSA=1
-# export CUDA_LAUNCH_BLOCKING=1
-# export TRITON_LOG_LEVEL=debug
+export TORCH_USE_CUDA_DSA=1
+export CUDA_LAUNCH_BLOCKING=1
+export TRITON_LOG_LEVEL=debug
 
 # PYTHONWARNINGS=ignore CUDA_VISIBLE_DEVICES=$1 ENABLE_INTRA_NODE_COMM=1 torchrun \
 #         --standalone \
@@ -22,12 +22,15 @@
 #         --gen_len 90 \
 #         --compile
 
-model="/rscratch/rishabhtiwari/cache/Qwen/Qwen2.5-7B-Instruct/model.pth"
-model_name="Qwen/Qwen2.5-7B-Instruct"
+# model="/rscratch/rishabhtiwari/cache/Qwen/Qwen2.5-7B-Instruct/model.pth"
+# model_name="Qwen/Qwen2.5-7B-Instruct"
 # model="/rscratch/rishabhtiwari/cache/meta-llama/Llama-3.1-8B-Instruct/model.pth"
 # model_name="meta-llama/Llama-3.1-8B-Instruct"
-dataset="pg19"
-marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/Qwen2.5-7B-Instruct-4bit-128g"
+model="/rscratch/rishabhtiwari/cache/mistralai/Mistral-7B-v0.3/model.pth"
+model_name="mistralai/Mistral-7B-v0.3"
+dataset="multilexsum"
+marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/mistral_7b_checkpoint.pt.marlin.g128"
+# marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/Qwen2.5-7B-Instruct-4bit-128g"
 # marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/llama3_1_8b_instruct_checkpoint.pt.marlin.g128"
 
 # model="/rscratch/rishabhtiwari/cache/LargeWorldModel/LWM-Text-128K/model.pth"
@@ -47,8 +50,8 @@ marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/Qwen2.5-7B-In
 
 
 
-for prefix_len in 32000; do
-  for gamma in 4; do
+for prefix_len in 16000; do
+  for gamma in 6; do
     for prefix_ratio in 0.25; do
       streamingllm_budget=$(printf "%.0f" $(echo "$prefix_len * $prefix_ratio" | bc))
       # if [ $prefix_len -gt 64000 ]; then
@@ -56,7 +59,7 @@ for prefix_len in 32000; do
       if [ $prefix_len -gt 32000 ]; then
         gpus="1,2"
       else
-        gpus="1"
+        gpus="2"
       fi
 
       echo "----------------------------------------"
@@ -78,6 +81,7 @@ for prefix_len in 32000; do
         --prefix_len $prefix_len \
         --gen_len 90 \
         --printoutput \
+        --wq \
         --benchmark
     done
   done

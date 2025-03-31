@@ -551,9 +551,9 @@ class FeedForward(nn.Module):
         
 
         if config.quantize:
-            self.w1_quantized = marlin_Layer2(config.dim, config.intermediate_size, groupsize=128)
-            self.w3_quantized = marlin_Layer2(config.dim, config.intermediate_size, groupsize=128)
-            self.w2_quantized = marlin_Layer2(config.intermediate_size, config.dim, groupsize=128)
+            self.w1_quantized = marlin_Layer(config.dim, config.intermediate_size, groupsize=128)
+            self.w3_quantized = marlin_Layer(config.dim, config.intermediate_size, groupsize=128)
+            self.w2_quantized = marlin_Layer(config.intermediate_size, config.dim, groupsize=128)
         self.process_group = None
 
     def forward(self, x: Tensor) -> Tensor:
