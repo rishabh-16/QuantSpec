@@ -170,7 +170,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
         draft_tokens = tokens_buffer[:, 1:args.gamma+1]
         flag_accept_matrix = (target_tokens[:, :args.gamma] == draft_tokens)  # shape: (BATCH_SIZE, gamma)
         flag_accept_matrix = torch.ones(flag_accept_matrix.shape, device=DEVICE, dtype=torch.bool)
-        if step < 7:
+        if step < 6:
             flag_accept_matrix[:, args.gamma-1] = 0
         eot_condition = ((draft_tokens == eot_1) | (draft_tokens == eot_2))  # shape: (BATCH_SIZE, gamma)
         accept_flags_int = (flag_accept_matrix & (~eot_condition)).int()
