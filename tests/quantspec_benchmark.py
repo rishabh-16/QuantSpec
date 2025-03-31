@@ -125,6 +125,7 @@ for step, batch in tqdm(enumerate(dataloader), total=num_eval_steps):
     num_nodes += input_ids.shape[1]
 
     tokens_buffer[:,:1] = engine.encode(input_ids=input_ids)[:,-1]
+    torch.cuda.reset_peak_memory_stats()
     
     # tokens_buffer[:,:1] = sampling_argmax_batch(logits=logits)
     

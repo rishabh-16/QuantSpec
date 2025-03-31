@@ -123,8 +123,8 @@ class LMBackend:
             # raise NotImplementedError("Not implemented for seq_len < 1000")
             logits = self.prefill(
                 model=self.model,
-                x=input_ids[:, :8000],
-                input_pos=position_ids[:, :8000],
+                x=input_ids,
+                input_pos=position_ids,
                 cache_seqlens=self.cachelens,
                 qcache_seqlens=self.q_cachelens
             )

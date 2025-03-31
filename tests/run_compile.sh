@@ -24,10 +24,12 @@
 
 # model="/rscratch/rishabhtiwari/cache/LargeWorldModel/LWM-Text-Chat-128K/model.pth"
 # model_name="LargeWorldModel/LWM-Text-Chat-128K"
-model="/rscratch/rishabhtiwari/cache/meta-llama/Llama-3.1-8B/model.pth"
-model_name="meta-llama/Llama-3.1-8B"
+# model="/rscratch/rishabhtiwari/cache/meta-llama/Llama-3.1-8B/model.pth"
+# model_name="meta-llama/Llama-3.1-8B"
+model="/rscratch/rishabhtiwari/cache/mistralai/Mistral-7B-v0.3/model.pth"
+model_name="mistralai/Mistral-7B-v0.3"
 dataset="multilexsum"
-marlin_path="/rscratch/rishabhtiwari/checkpoint.pt.marlin.g128"
+marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/mistral_7b_checkpoint.pt.marlin.g128"
 
 # model="/rscratch/rishabhtiwari/cache/LargeWorldModel/LWM-Text-128K/model.pth"
 # model_name="LargeWorldModel/LWM-Text-128K"
@@ -46,13 +48,13 @@ marlin_path="/rscratch/rishabhtiwari/checkpoint.pt.marlin.g128"
 
 
 
-for prefix_len in 16000; do
+for prefix_len in 32000; do
   for gamma in 6; do
     for prefix_ratio in 0.25; do
       streamingllm_budget=$(printf "%.0f" $(echo "$prefix_len * $prefix_ratio" | bc))
       # if [ $prefix_len -gt 64000 ]; then
       #   gpus="4,5,6,7"
-      if [ $prefix_len -gt 32000 ]; then
+      if [ $prefix_len -gt 128000 ]; then
         gpus="6,7"
       else
         gpus="6"

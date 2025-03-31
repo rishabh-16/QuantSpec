@@ -47,7 +47,7 @@ def convert_pg19_dataset(tokenizer, seq_len = 4096, end = 20):
         tokenized_prompt = tokenized_prompt.split(seq_len, dim=-1)[:-1]
         
         for i in range(len(tokenized_prompt)):
-             tokenized_prompt[i][:, 0] = tokenizer.bos_token_id
+             tokenized_prompt[i][:, 0] = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
              tokenized_prompts.append(tokenized_prompt[i])
     data = torch.cat(tokenized_prompts, dim=0).repeat(end,1)
     return TensorDataset(data)
@@ -70,7 +70,7 @@ def convert_multilexsum_dataset(tokenizer, seq_len = 4096, end = 20):
     system_template_len = tokenizer.encode(system_template, return_tensors="pt").shape[1]
     for i in range(50):
         tokenized_prompt = tokenizer.encode(user_template.format(demo="", context=all_data['context'][i]), return_tensors="pt")[:, :seq_len-system_template_len]
-        tokenized_prompt[:, 0] = tokenizer.bos_token_id
+        tokenized_prompt[:, 0] = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
         tokenized_prompt = torch.cat((tokenized_prompt, tokenizer.encode(system_template, return_tensors="pt")), axis=1)
         if tokenized_prompt.shape[1] >= seq_len:
             tokenized_prompts.append(tokenized_prompt)
@@ -101,7 +101,7 @@ def load_infbench(tokenizer, seq_len = 4096, end = 20):
     system_template_len = tokenizer.encode(system_template, return_tensors="pt").shape[1]
     for i in range(50):
         tokenized_prompt = tokenizer.encode(user_template.format(demo="", context=all_data[i]['context']), return_tensors="pt")[:, :seq_len-system_template_len]
-        tokenized_prompt[:, 0] = tokenizer.bos_token_id
+        tokenized_prompt[:, 0] = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
         tokenized_prompt = torch.cat((tokenized_prompt, tokenizer.encode(system_template, return_tensors="pt")), axis=1)
         if tokenized_prompt.shape[1] >= seq_len:
             tokenized_prompts.append(tokenized_prompt)

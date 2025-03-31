@@ -44,6 +44,8 @@ class ModelArgs:
     high_freq_factor: int = None  # added new
     original_max_position_embeddings: int = None   # added new
     quantize: bool = False
+    qkv_bias: bool = False
+
 
     def __post_init__(self):
         if self.n_local_heads == -1:
@@ -313,7 +315,7 @@ class Attention(nn.Module):
 
         total_head_dim = (config.n_head + 2 * config.n_local_heads) * config.head_dim
         # key, query, value projections for all heads, but in a batch
-        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=config.qkv_bias)
+        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=False)
         self.wo = nn.Linear(config.dim, config.dim, bias=False)
         self.kv_cache = None
         self.process_group = None
