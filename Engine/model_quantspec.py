@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Optional
 
 import torch
@@ -11,6 +12,10 @@ from QuantSpec_magidec.kernels.quantize.quant_pack_int8toint8_upperlower import 
 import marlin
 from QuantSpec_magidec.Engine.model import transformer_configs
 from gptqmodel.nn_modules.qlinear.marlin import MarlinQuantLinear
+from gptqmodel.models._const import DEVICE, PLATFORM
+from gptqmodel.adapter.adapter import Adapter, Lora
+
+
 
 def find_multiple(n: int, k: int) -> int:
     if n % k == 0:
@@ -18,11 +23,29 @@ def find_multiple(n: int, k: int) -> int:
     return n + k - (n % k)
 
 class marlin_Layer2(MarlinQuantLinear):
+    SUPPORTS_BITS = [4, 8]
+    SUPPORTS_GROUP_SIZE = [-1, 32, 64, 128]
+    SUPPORTS_DESC_ACT = [True, False]
+    SUPPORTS_SYM = [True]
+    SUPPORTS_SHARDS = True
+    SUPPORTS_TRAINING = False
+    SUPPORTS_AUTO_PADDING = False
+    SUPPORTS_IN_FEATURES_DIVISIBLE_BY = [1]
+    SUPPORTS_OUT_FEATURES_DIVISIBLE_BY = [64]
+
+    SUPPORTS_DEVICES = [DEVICE.CUDA]
+    SUPPORTS_PLATFORM = [PLATFORM.LINUX]
+    SUPPORTS_PACK_DTYPES = [torch.int32]
+    SUPPORTS_ADAPTERS = [Lora]
+    # for transformers/optimum tests compat
+    QUANT_TYPE = "marlin"
+
     def __init__(self, infeatures, outfeatures, groupsize=-1):
-        super().__init__(bits=4, groupsize=groupsize, desc_act=True, sym=True, in_features=infeatures, out_features=outfeatures)
+        super().__init__(bits=4, group_size=groupsize, desc_act=True, sym=True, in_features=infeatures, out_features=outfeatures)
+        super().post_init()
 
     def forward(self, x):
-        out = torch.ops.mylib.apply_gptq_marlin_linear(
+        out = torch.ops.mylib.gptq_marlin_linear(
             input=x,
             weight=self.qweight,
             weight_scale=self.scales,
@@ -34,9 +57,9 @@ class marlin_Layer2(MarlinQuantLinear):
             output_size_per_partition=self.out_features,
             input_size_per_partition=self.in_features,
             is_k_full=self.is_k_full,
-            bias=self.bias,
             fp32=self.fp32,
         )
+        return out
 
 
 class marlin_Layer(marlin.Layer):
@@ -66,6 +89,7 @@ class ModelArgs:
     high_freq_factor: int = None  # added new
     original_max_position_embeddings: int = None   # added new
     quantize: bool = False
+    qkv_bias: bool = False
 
     def __post_init__(self):
         if self.n_local_heads == -1:
@@ -337,7 +361,7 @@ class Attention(nn.Module):
 
         total_head_dim = (config.n_head + 2 * config.n_local_heads) * config.head_dim
         # key, query, value projections for all heads, but in a batch
-        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=False)
+        self.wqkv = nn.Linear(config.dim, total_head_dim, bias=config.qkv_bias)
         self.wo = nn.Linear(config.dim, config.dim, bias=False)
         self.kv_cache = None
         self.process_group = None
@@ -359,6 +383,11 @@ class Attention(nn.Module):
             wk = state_dict.pop(prefix + "wk.weight")
             wv = state_dict.pop(prefix + "wv.weight")
             state_dict[prefix + "wqkv.weight"] = torch.cat([wq, wk, wv])
+        if prefix + "wq.bias" in state_dict:
+            wq = state_dict.pop(prefix + "wq.bias")
+            wk = state_dict.pop(prefix + "wk.bias")
+            wv = state_dict.pop(prefix + "wv.bias")
+            state_dict[prefix + "wqkv.bias"] = torch.cat([wq, wk, wv])
     
     def repeat_kv(self, hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
         """

@@ -22,10 +22,13 @@
 #         --gen_len 90 \
 #         --compile
 
-model="/rscratch/rishabhtiwari/cache/LargeWorldModel/LWM-Text-Chat-128K/model.pth"
-model_name="LargeWorldModel/LWM-Text-Chat-128K"
-dataset="multilexsum"
-marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/lwm_text_chat_128k_checkpoint.pt.marlin.g128"
+model="/rscratch/rishabhtiwari/cache/Qwen/Qwen2.5-7B-Instruct/model.pth"
+model_name="Qwen/Qwen2.5-7B-Instruct"
+# model="/rscratch/rishabhtiwari/cache/meta-llama/Llama-3.1-8B-Instruct/model.pth"
+# model_name="meta-llama/Llama-3.1-8B-Instruct"
+dataset="pg19"
+marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/Qwen2.5-7B-Instruct-4bit-128g"
+# marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/llama3_1_8b_instruct_checkpoint.pt.marlin.g128"
 
 # model="/rscratch/rishabhtiwari/cache/LargeWorldModel/LWM-Text-128K/model.pth"
 # model_name="LargeWorldModel/LWM-Text-128K"
@@ -44,16 +47,16 @@ marlin_path="/rscratch/rishabhtiwari/QuantSpec_magidec/marlin/gptq/lwm_text_chat
 
 
 
-for prefix_len in 16000 32000 64000 128000; do
-  for gamma in 2; do
+for prefix_len in 32000; do
+  for gamma in 4; do
     for prefix_ratio in 0.25; do
       streamingllm_budget=$(printf "%.0f" $(echo "$prefix_len * $prefix_ratio" | bc))
       # if [ $prefix_len -gt 64000 ]; then
       #   gpus="4,5,6,7"
       if [ $prefix_len -gt 32000 ]; then
-        gpus="6,7"
+        gpus="1,2"
       else
-        gpus="6"
+        gpus="1"
       fi
 
       echo "----------------------------------------"
@@ -72,10 +75,9 @@ for prefix_len in 16000 32000 64000 128000; do
         --rank_group $(seq -s ' ' 0 $(($(echo $gpus | tr ',' ' ' | wc -w) - 1))) \
         --gamma $gamma \
         --B 1 \
-        --wq \
         --prefix_len $prefix_len \
         --gen_len 90 \
-        --compile \
+        --printoutput \
         --benchmark
     done
   done

@@ -13,7 +13,7 @@ from gptqmodel.nn_modules.qlinear.marlin import apply_gptq_marlin_linear
 
 
 torch.library.define(
-    "mylib::apply_gptq_marlin_linear",
+    "mylib::gptq_marlin_linear",
     "(Tensor(a!) input, \
     Tensor(b!) weight, \
     Tensor(c!) weight_scale, \
@@ -25,18 +25,17 @@ torch.library.define(
     Scalar output_size_per_partition, \
     Scalar input_size_per_partition, \
     Scalar is_k_full, \
-    Scalar bias, \
     Scalar fp32 \
     ) -> Tensor",
 )
 
-@torch.library.impl("mylib::apply_gptq_marlin_linear", "cuda")
-def apply_gptq_marlin_linear(input, weight, weight_scale, weight_zp, g_idx, g_idx_sort_indices, workspace, num_bits, output_size_per_partition, input_size_per_partition, is_k_full, bias, fp32):
-    return apply_gptq_marlin_linear(input, weight, weight_scale, weight_zp, g_idx, g_idx_sort_indices, workspace, num_bits, output_size_per_partition, input_size_per_partition, is_k_full, bias, fp32)
+@torch.library.impl("mylib::gptq_marlin_linear", "cuda")
+def gptq_marlin_linear(input, weight, weight_scale, weight_zp, g_idx, g_idx_sort_indices, workspace, num_bits, output_size_per_partition, input_size_per_partition, is_k_full, fp32):
+    return apply_gptq_marlin_linear(input, weight, weight_scale, weight_zp, g_idx, g_idx_sort_indices, workspace, num_bits, output_size_per_partition, input_size_per_partition, is_k_full, None, True)
 
 
-@torch.library.impl_abstract("mylib::apply_gptq_marlin_linear")
-def apply_gptq_marlin_linear_abstract(input, weight, weight_scale, weight_zp, g_idx, g_idx_sort_indices, workspace, num_bits, output_size_per_partition, input_size_per_partition, is_k_full, bias, fp32):
+@torch.library.impl_abstract("mylib::gptq_marlin_linear")
+def gptq_marlin_linear_abstract(input, weight, weight_scale, weight_zp, g_idx, g_idx_sort_indices, workspace, num_bits, output_size_per_partition, input_size_per_partition, is_k_full, fp32):
     output_shape = input.shape[:-1] + (output_size_per_partition,)
     return torch.empty(output_shape, dtype=input.dtype, device=input.device)
 
